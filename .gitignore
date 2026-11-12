@@ -1,0 +1,3 @@
+*.syx
+__pycache__/
+*.pyc
