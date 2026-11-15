@@ -1,5 +1,7 @@
 # pc44-mod: Step-Sequencer für den Faderfox PC44
 
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-noxend-FF5E5B?logo=ko-fi&logoColor=white)](https://ko-fi.com/noxend) [![Lizenz: MIT](https://img.shields.io/badge/Lizenz-MIT-blue)](LICENSE)
+
 Eine inoffizielle Erweiterung der Faderfox-PC44-Firmware **V01.01**, die aus dem Controller einen
 **4-Spur-Step-Sequencer mit je 16 Steps** macht – im Stil von Modwerk, direkt auf der Hardware.
 Die normalen Controller-Funktionen bleiben erhalten: Der Sequencer ist nur aktiv, wenn im Setup das
@@ -69,3 +71,15 @@ python3 tests/test_interrupts.py 1   # Interrupts an zufälligen Stellen einstre
 - ATxmega128A4U, 32 MHz. Nur GPIOR0..3 speichern Werte, GPIOR4..15 lesen auf diesem Chip immer 0.
 - Die Firmware nutzt das EEPROM von 0x010 bis 0x11F, der Sequencer speichert ab 0x400.
 - Der Bootloader akzeptiert grössere Images als das Original (getestet bis 151 Seiten).
+
+## Mitmachen
+
+Ideen, Fehlerberichte und Pull Requests sind willkommen, siehe [CONTRIBUTING.md](CONTRIBUTING.md). Besonders hilfreich: auf deinem PC44 testen und berichten.
+
+## Unterstützen
+
+pc44-mod ist kostenlos. Wenn dir der Sequencer gefällt: **[ko-fi.com/noxend](https://ko-fi.com/noxend)**
+
+## Lizenz
+
+Der Code in diesem Repository (Build- und Patch-Werkzeuge, Assembler, Disassembler, Simulatoren, Anleitung) steht unter der [MIT-Lizenz](LICENSE). Sie gilt **nicht** für die Faderfox-Firmware: Die Original-Firmware ist nicht enthalten, bleibt urheberrechtlich geschützt und muss von Faderfox bezogen werden. Faderfox und PC44 sind Namen ihres Herstellers; keine Verbindung zu Faderfox.

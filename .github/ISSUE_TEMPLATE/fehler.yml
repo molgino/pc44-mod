@@ -1,0 +1,16 @@
+name: Fehler melden / Bug report
+description: Der Sequencer oder das Bauen der Firmware funktioniert nicht.
+labels: [bug]
+body:
+  - type: input
+    id: fw
+    attributes:
+      label: Original-Firmware und Stand von pc44-mod
+      placeholder: z. B. PC44 V01.01, Commit 458c2e4
+    validations: {required: true}
+  - type: textarea
+    id: what
+    attributes:
+      label: Was ist passiert, was hättest du erwartet?
+      description: Schritte zum Nachstellen; bei Clock-Problemen das angeschlossene Gerät nennen.
+    validations: {required: true}
