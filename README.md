@@ -1,85 +1,87 @@
-# pc44-mod: Step-Sequencer für den Faderfox PC44
+# pc44-mod: step sequencer for the Faderfox PC44
 
-[![Ko-fi](https://img.shields.io/badge/Ko--fi-noxend-FF5E5B?logo=ko-fi&logoColor=white)](https://ko-fi.com/noxend) [![Lizenz: MIT](https://img.shields.io/badge/Lizenz-MIT-blue)](LICENSE)
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-noxend-FF5E5B?logo=ko-fi&logoColor=white)](https://ko-fi.com/noxend) [![Licence: MIT](https://img.shields.io/badge/Licence-MIT-blue)](LICENSE)
 
-Eine inoffizielle Erweiterung der Faderfox-PC44-Firmware **V01.01**, die aus dem Controller einen
-**4-Spur-Step-Sequencer mit je 16 Steps** macht – im Stil von Modwerk, direkt auf der Hardware.
-Die normalen Controller-Funktionen bleiben erhalten: Der Sequencer ist nur aktiv, wenn im Setup das
-Routing **`SEq`** gewählt ist.
+An unofficial extension of the Faderfox PC44 firmware **V01.01** that turns the controller into a
+**4-track step sequencer with 16 steps each** – in the style of Modwerk, right on the hardware.
+The normal controller functions stay intact: the sequencer is only active when the routing
+**`SEq`** is selected in setup.
 
-> **Hinweis:** Dies ist kein Produkt von Faderfox und wird von Faderfox weder unterstützt noch geprüft.
-> Die Original-Firmware ist **nicht** in diesem Repository enthalten (Urheberrecht von Faderfox).
-> Benutzung auf eigene Gefahr – die Original-Firmware lässt sich jederzeit wieder einspielen.
+> **Note:** this is not a Faderfox product and is neither supported nor reviewed by Faderfox.
+> The original firmware is **not** included in this repository (copyright Faderfox).
+> Use at your own risk – you can always flash the original firmware again.
 
-## Funktionen
+> **How this was made:** pc44-mod is vibecoded. The patches were written with an AI coding assistant (Claude), checked in an AVR emulator and tested on a real PC44 by the author. Reviews from people who know AVR assembly are very welcome.
 
-| Bereich | Funktionen |
+## Features
+
+| Area | Features |
 |---|---|
-| Pro Step | Velocity, Tonhöhe (skalenbasiert), Notenlänge (1/12 … 16 Steps), Wahrscheinlichkeit 10–100 % und Bedingungen 1:2 … 8:8, Ratchet 1–4, Akkordart, Nudge (Microtiming ±½ Step) |
-| Pro Spur (Edit-Seite) | Pattern-Länge 1–16, Oktave, Speed ×1/8 … ×2, MIDI-Kanal, Richtung (vorwärts, rückwärts, Pingpong, zufällig), Modus Note / Chord / Pad |
-| Global | Tempo 30–250 BPM, Shuffle, Grundton, 11 Skalen |
-| Live | quantisiertes Mute (Shift + Poti), Spur löschen, **Ctrl all** (Lock + Poti: alle aktiven Steps einer Spur relativ ändern) |
-| Clock | interner Takt mit MIDI-Clock-Ausgang oder automatisch synchron zu externer MIDI-Clock (USB/DIN), Start/Continue/Stop |
-| Speicher | Pattern und Einstellungen werden automatisch im EEPROM gesichert (übersteht Aus- und Einschalten) |
-| Snap/Jump | der Poti-Modus der Firmware gilt pro Step-Parameter |
+| Per step | velocity, pitch (scale-based), note length (1/12 … 16 steps), probability 10–100 % and conditions 1:2 … 8:8, ratchet 1–4, chord type, nudge (microtiming ±½ step) |
+| Per track (edit page) | pattern length 1–16, octave, speed ×1/8 … ×2, MIDI channel, direction (forward, backward, ping-pong, random), mode note / chord / pad |
+| Global | tempo 30–250 BPM, shuffle, root note, 11 scales |
+| Live | quantised mute (Shift + pot), clear track, **Ctrl all** (Lock + pot: change all active steps of a track relatively) |
+| Clock | internal clock with MIDI clock output, or automatically synced to external MIDI clock (USB/DIN), start/continue/stop |
+| Memory | patterns and settings are saved automatically to EEPROM (they survive power cycles) |
+| Snap/Jump | the firmware's pot mode applies per step parameter |
 
-Die vollständige Bedienungsanleitung liegt unter [`docs/PC44_SEq_Anleitung.pdf`](docs/PC44_SEq_Anleitung.pdf).
+The full manual (German) is in [`docs/PC44_SEq_Anleitung.pdf`](docs/PC44_SEq_Anleitung.pdf).
 
-## Firmware bauen
+## Building the firmware
 
-Voraussetzung: Python 3.8 oder neuer, keine weiteren Pakete.
+Requires Python 3.8 or newer, no other packages.
 
-1. Die Original-Firmware **`PC44_V0101.syx`** (Version 01.01) bei Faderfox herunterladen und in diesen Ordner legen.
-2. Bauen:
+1. Download the original firmware **`PC44_V0101.syx`** (version 01.01) from Faderfox and put it in this folder.
+2. Build:
 
    ```sh
    python3 build.py PC44_V0101.syx PC44_seq.syx
    ```
 
-   Das Skript prüft an jeder Patch-Stelle, dass die Original-Bytes stimmen, und bricht bei einer anderen
-   Firmware-Version ab.
-3. `PC44_seq.syx` wie ein normales Firmware-Update mit **Bome SendSX** an den PC44 schicken
-   (Vorgehen laut Faderfox-Anleitung).
-4. Im Setup mit Taste 2 (Routing) hinter `rou6` den Eintrag `SEq` wählen.
+   The script checks at every patch location that the original bytes match, and stops for any other
+   firmware version.
+3. Send `PC44_seq.syx` to the PC44 like a normal firmware update with **Bome SendSX**
+   (procedure as in the Faderfox manual).
+4. In setup, use button 2 (routing) and choose the entry `SEq` after `rou6`.
 
-Zurück zum Original: `PC44_V0101.syx` genauso einspielen.
+Back to the original: flash `PC44_V0101.syx` the same way.
 
-## Wie es funktioniert
+## How it works
 
-Die Firmware des ATxmega128A4U wird nicht neu geschrieben, sondern gepatcht:
+The firmware of the ATxmega128A4U is not rewritten but patched:
 
-- **`pc44tool.py`** – liest und schreibt das SysEx-Update-Format des PC44 (Seiten, Prüfsummen).
-- **`asm.py`** – kleiner AVR-Assembler (Teilmenge der Befehle).
-- **`avrdis.py`** – AVR-Disassembler.
-- **`build.py`** – enthält den Sequencer-Code in Assembler. Er wird hinter das Original-Image gelegt; an wenigen Stellen (Hauptschleife, Poti-Verarbeitung, Anzeige, LEDs, MIDI-Empfang, Timer-Interrupts) werden Sprünge in den neuen Code eingesetzt.
+- **`pc44tool.py`** – reads and writes the PC44's SysEx update format (pages, checksums).
+- **`asm.py`** – small AVR assembler (subset of the instructions).
+- **`avrdis.py`** – AVR disassembler.
+- **`build.py`** – contains the sequencer code in assembly. It is placed after the original image; at a few places (main loop, pot handling, display, LEDs, MIDI receive, timer interrupts) jumps into the new code are inserted.
 
 ## Tests
 
-Die Tests laufen in einem AVR-Emulator (`tests/avrsim.py`, EEPROM/NVM-Modell in `tests/eesim.py`), der das echte
-Firmware-Image ausführt. Sie brauchen ebenfalls die Original-Firmware (Pfad über `PC44_ORIG` änderbar):
+The tests run in an AVR emulator (`tests/avrsim.py`, EEPROM/NVM model in `tests/eesim.py`) that executes the real
+firmware image. They also need the original firmware (path can be changed with `PC44_ORIG`):
 
 ```sh
-python3 tests/test_seq.py            # Funktionstest aller Features
-python3 tests/test_interrupts.py 1   # Interrupts an zufälligen Stellen einstreuen
+python3 tests/test_seq.py            # functional test of all features
+python3 tests/test_interrupts.py 1   # inject interrupts at random points
 ```
 
-`tests/build_seq20.py` ist eine ältere Version und wird nur für den Test gebraucht, dass Patterns aus dem
-älteren Speicherformat übernommen werden.
+`tests/build_seq20.py` is an older version and is only needed for the test that patterns from the
+older storage format are carried over.
 
-## Hardware-Notizen
+## Hardware notes
 
-- ATxmega128A4U, 32 MHz. Nur GPIOR0..3 speichern Werte, GPIOR4..15 lesen auf diesem Chip immer 0.
-- Die Firmware nutzt das EEPROM von 0x010 bis 0x11F, der Sequencer speichert ab 0x400.
-- Der Bootloader akzeptiert grössere Images als das Original (getestet bis 151 Seiten).
+- ATxmega128A4U, 32 MHz. Only GPIOR0..3 store values; GPIOR4..15 always read 0 on this chip.
+- The firmware uses EEPROM from 0x010 to 0x11F; the sequencer stores from 0x400.
+- The bootloader accepts larger images than the original (tested up to 151 pages).
 
-## Mitmachen
+## Contributing
 
-Ideen, Fehlerberichte und Pull Requests sind willkommen, siehe [CONTRIBUTING.md](CONTRIBUTING.md). Besonders hilfreich: auf deinem PC44 testen und berichten.
+Ideas, bug reports and pull requests are welcome, see [CONTRIBUTING.md](CONTRIBUTING.md). Especially helpful: test on your PC44 and report back.
 
-## Unterstützen
+## Support
 
-pc44-mod ist kostenlos. Wenn dir der Sequencer gefällt: **[ko-fi.com/noxend](https://ko-fi.com/noxend)**
+pc44-mod is free. If you like the sequencer: **[ko-fi.com/noxend](https://ko-fi.com/noxend)**
 
-## Lizenz
+## Licence
 
-Der Code in diesem Repository (Build- und Patch-Werkzeuge, Assembler, Disassembler, Simulatoren, Anleitung) steht unter der [MIT-Lizenz](LICENSE). Sie gilt **nicht** für die Faderfox-Firmware: Die Original-Firmware ist nicht enthalten, bleibt urheberrechtlich geschützt und muss von Faderfox bezogen werden. Faderfox und PC44 sind Namen ihres Herstellers; keine Verbindung zu Faderfox.
+The code in this repository (build and patch tools, assembler, disassembler, simulators, manual) is under the [MIT licence](LICENSE). It does **not** cover the Faderfox firmware: the original firmware is not included, remains under copyright and must be obtained from Faderfox. Faderfox and PC44 are names of their manufacturer; no affiliation with Faderfox.

@@ -1,22 +1,24 @@
-# Mitmachen bei pc44-mod
+# Contributing to pc44-mod
 
-Danke fürs Mithelfen! Deutsch oder Englisch – beides ist willkommen.
+Thanks for helping! English or German – both are welcome.
 
-## Fehler melden
-[Issue anlegen](https://github.com/molgino/pc44-mod/issues/new/choose) mit Firmware-Version (nur V01.01 wird unterstützt), Commit von pc44-mod und Schritten zum Nachstellen.
+## Reporting bugs
+[Open an issue](https://github.com/molgino/pc44-mod/issues/new/choose) with the firmware version (only V01.01 is supported), the pc44-mod commit and steps to reproduce.
 
-## Code beitragen
-1. Fork anlegen, Branch erstellen.
-2. Original-Firmware `PC44_V0101.syx` selbst bei Faderfox herunterladen (**nie ins Repository legen**).
-3. Bauen und testen (Python 3.8+, keine Pakete nötig):
+## Contributing code
+1. Fork the repository and create a branch.
+2. Download the original firmware `PC44_V0101.syx` from Faderfox yourself (**never put it in the repository**).
+3. Build and test (Python 3.8+, no packages needed):
    ```sh
    python3 build.py PC44_V0101.syx PC44_seq.syx
-   python3 tests/test_seq.py          # Sequencer im AVR-Emulator (braucht die Original-Firmware im Ordner
-   python3 tests/test_interrupts.py   # oder per PC44_ORIG=/pfad/PC44_V0101.syx)
+   python3 tests/test_seq.py          # sequencer in the AVR emulator (needs the original firmware in the folder
+   python3 tests/test_interrupts.py   # or via PC44_ORIG=/path/PC44_V0101.syx)
    ```
-4. Pull Request gegen `main`, mit Hinweis, ob auf echter Hardware getestet.
+4. Open a pull request against `main` and say whether you tested on real hardware.
 
-## Regeln
-- **Keine Faderfox-Firmware und keine größeren Teile davon** ins Repository, auch nicht disassembliert. Erlaubt sind die kurzen Prüf-Bytes an den Patch-Stellen.
-- `build.py` muss bei einer falschen Firmware-Version abbrechen statt zu patchen.
-- Mit einem Pull Request stimmst du zu, dass dein Beitrag unter der [MIT-Lizenz](LICENSE) steht.
+The project is vibecoded (written with an AI coding assistant, checked in the emulator and on hardware), so reviews of the existing patches are just as welcome as new features.
+
+## Rules
+- **No Faderfox firmware and no larger parts of it** in the repository, not even disassembled. The short check bytes at the patch locations are fine.
+- `build.py` must stop for a wrong firmware version instead of patching.
+- By opening a pull request you agree that your contribution is licensed under the [MIT licence](LICENSE).
