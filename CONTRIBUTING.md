@@ -13,6 +13,7 @@ Thanks for helping! English or German – both are welcome.
    python3 build.py PC44_V0101.syx PC44_seq.syx
    python3 tests/test_seq.py          # sequencer in the AVR emulator (needs the original firmware in the folder
    python3 tests/test_interrupts.py   # or via PC44_ORIG=/path/PC44_V0101.syx)
+   python3 tests/test_patterns.py     # A/B and interrupted-save regression tests
    ```
 4. Open a pull request against `main` and say whether you tested on real hardware.
 

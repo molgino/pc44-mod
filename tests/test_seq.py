@@ -233,18 +233,13 @@ m.mem[0x3DE2] = 7; m.mem[0x3DE8] = 5; m.mem[0x3DED] = 4; m.mem[3] = 133
 snap = {k: bytes(m.mem[a:a + n]) for k, (a, n) in dict(N=(N, 64), V=(V, 64), P=(P, 64), R=(R, 64), L=(L, 64),
         T=(0x3DE2, 12), TL=(TLEN, 4), S=(SPD, 12), MQ=(MREQ, 4), BPM=(3, 1)).items()}
 m.pagewrites.clear(); tick(60)
-check(m.pagewrites == {}, 'direkt nach der Änderung wird noch nicht geschrieben')
-tick(300)
-check(set(m.pagewrites) == set(range(0x400, 0x560, 32)) and max(m.pagewrites.values()) == 1, 'nach ~2 s: die 11 geänderten Seiten je 1x geschrieben')
-check(bytes(m.ee[0x400 + B.MAGOFF:0x400 + B.MAGOFF + 2]) == bytes(B.MAGIC), 'Kennung im EEPROM')
-m.pagewrites.clear(); start(); tick(2000); m.mem[2] = 0
+check(m.pagewrites == {}, 'ohne Speichern keine EEPROM-Schreibvorgänge')
+m.mem[V + 5] = 111
+snap['V'] = bytes(m.mem[V:V + 64])
+call('pattern_save'); tick(220)
+check(bytes(m.ee[0x5e0:0x5e6]) == bytes((0x50, 26, 0, 255, 1, 254)), 'Kennung im EEPROM')
+m.pagewrites.clear(); start(); tick(100); m.mem[2] = 0
 check(m.pagewrites == {}, 'Abspielen ohne Änderungen schreibt nichts (Laufposition wird nicht gespeichert)')
-m.pagewrites.clear()
-for k in range(400):
-    m.mem[V + 5] = k % 128; tick(1)
-check(m.pagewrites == {}, 'solange ein Poti bewegt wird, wird nicht geschrieben')
-m.mem[V + 5] = 111; snap['V'] = bytes(m.mem[V:V + 64]); tick(300)
-check(sum(m.pagewrites.values()) == 1, 'danach genau 1 Seite geschrieben')
 check(m.errors == [], 'NVM-Zugriffe korrekt %s' % m.errors[:3])
 
 print('10) Aus- und Einschalten')
@@ -263,7 +258,7 @@ check(list(m.mem[POS:POS + 4]) == [0xff] * 4, 'Laufposition beginnt neu')
 m3 = AVR(img); m3.stubs.update(keep.stubs); m = m3; call('init')
 check(m.mem[V] == 100 and m.mem[3] == 120 and m.mem[SPD] == 4, 'leeres EEPROM: Grundeinstellung')
 bad = bytearray(ee)
-for i in list(range(B.MAGOFF)) + list(range(B.MAGOFF + 2, B.EESIZE)): bad[0x400 + i] = 0xEE
+bad[0x400:0x5e0] = bytes([0xee]) * 480
 m4 = AVR(img, bad); m4.stubs.update(keep.stubs); m = m4; call('init')
 check(set(m.mem[N:N + 64]) == {62} and set(m.mem[P:P + 64]) == {9} and set(m.mem[R:R + 64]) == {1} and m.mem[3] == 238
       and set(m.mem[SPD:SPD + 4]) == {4} and set(m.mem[TLEN:TLEN + 4]) == {16}, 'kaputte Werte -> Grundwerte')
@@ -430,12 +425,14 @@ m.mem[MODE] = 1; m.mem[CT + 10] = 0; poti(4, 10, 127); poti(4, 10, 120); check(m
 call('rendhook'); check(text() == 'tri ', 'Anzeige aktuelle Akkordart %r' % text())
 poti(4, 10, 5); poti(4, 10, 40); check(m.mem[CT + 10] == 2, 'Akkordart: übernommen')
 m.mem[MODE] = 0
-m.mem[0x3DE2] = 1; poti(0, 67, 120); poti(0, 67, 110); check(m.mem[0x3DE2] == 1, 'Skala: nicht eingefangen')
-poti(0, 67, 5); check(m.mem[0x3DE2] == 0, 'Skala: übernommen')
-m.mem[0x3DED] = 3; poti(0, 64, 0); poti(0, 64, 10); check(m.mem[0x3DED] == 3, 'Shuffle: nicht eingefangen')
-poti(0, 64, 127); check(m.mem[0x3DED] == 6, 'Shuffle: übernommen')
-m.mem[0x3DE8] = 0; poti(0, 66, 100); poti(0, 66, 80); check(m.mem[0x3DE8] == 0, 'Grundton: nicht eingefangen')
-check(poti(0, 65, 80) == 'original', 'Poti 66: Firmware (normaler Controller)')
+m.mem[0x3DE2] = 1; poti(0, 67, 120, shift=1); poti(0, 67, 110, shift=1); check(m.mem[0x3DE2] == 1, 'Skala: nicht eingefangen')
+poti(0, 67, 5, shift=1); check(m.mem[0x3DE2] == 0, 'Skala: übernommen')
+m.mem[0x3DED] = 3; poti(0, 64, 0, shift=1); poti(0, 64, 10, shift=1); check(m.mem[0x3DED] == 3, 'Shuffle: nicht eingefangen')
+poti(0, 64, 127, shift=1); check(m.mem[0x3DED] == 6, 'Shuffle: übernommen')
+m.mem[0x3DE8] = 0; poti(0, 66, 100, shift=1); poti(0, 66, 80, shift=1); check(m.mem[0x3DE8] == 0, 'Grundton: nicht eingefangen')
+check(poti(0, 65, 80) == 'bearbeitet' and m.mem[B.patterns.CONSTS['VTRIM1']] == 80,
+      'Poti 66: Velocity-Trim für Spur 2')
+poti(0, 65, 64)
 SNAP[0] = 0
 m.mem[V + 11] = 100; poti(0, 11, 20); check(m.mem[V + 11] == 20, 'Jump-Modus: sofort übernommen')
 
@@ -447,7 +444,9 @@ call('rendhook'); check(text().rstrip() == 'oFF', 'Anzeige %r' % text())
 poti(0, 31, 90, shift=1); check(m.mem[MREQ + 1] == 1, 'anderes Poti der Spur, erste Bewegung rechts der Mitte: bleibt stumm')
 poti(0, 31, 80, shift=1); check(m.mem[MREQ + 1] == 0 and m.mem[MUTE + 1] == 0, 'Shift + links: Spur 2 wieder an')
 check(m.mem[V + 31] == 0, 'Step-Velocity von Poti 32 unverändert')
-m.mem[0x3DE2] = 4; poti(0, 67, 30, shift=1); check(m.mem[0x3DE2] == 4, 'Shift auf grossem Poti: nichts')
+m.mem[0x3DE2] = 4; poti(0, 67, 30)
+check(m.mem[0x3DE2] == 4 and m.mem[B.patterns.CONSTS['VTRIM3']] == 30, 'Poti 68 ohne Shift: nur Velocity-Trim')
+poti(0, 67, 64)
 v40 = m.mem[V + 40]; poti(5, 40, 90); check(m.mem[V + 40] == v40, 'Taste 5 verändert nicht mehr die Velocity')
 check(poti(0, 12, 50, setup=1) == 'setup', 'Setup-Seite: Firmware wie gehabt')
 poti(0, 12, 50); m.mem[V + 12] = 9; poti(0, 12, 50)
@@ -513,8 +512,8 @@ SNAP[0] = 0
 for i in range(16, 32): m.mem[NUD + i] = 1
 poti(6, 20, 127); check(set(m.mem[NUD + 16:NUD + 32]) == {6}, 'Spur löschen setzt Nudge zurück')
 m.mem[NUD + 33] = 2
-for _ in range(400): m.call(LB['tce0isr']); call('hook')
-check(m.ee[0x400 + B.EESIZE - 64 + 33] == 2, 'Nudge wird im EEPROM gespeichert')
+call('pattern_save'); tick(220)
+check(m.ee[0x400 + 6 * 64 + 33] == 2, 'Nudge wird im EEPROM gespeichert')
 
 print('21) Durchlauf-Wechsel beim ersten Step')
 clear_steps(); m.mem[TLEN] = 4; m.mem[V + 3] = 100; m.mem[P + 3] = 10   # Step 4, Bedingung 1:2
@@ -572,7 +571,8 @@ check([m.mem[NUD + T2 + k] for k in (0, 3, 1)] == [3, 3, 6], 'Taste 5: Nudge all
 v0 = bytes(m.mem[V + T2:V + T2 + 16])
 poti(6, 26, 0, lock=1); poti(6, 26, 127, lock=1)
 check(bytes(m.mem[V + T2:V + T2 + 16]) == v0 and m.mem[V + T2 + 1] == 0, 'Lock + Taste 6: nichts (kein Löschen)')
-m.mem[0x3DE2] = 0; poti(0, 67, 120, lock=1); check(m.mem[0x3DE2] == 10, 'Lock + grosses Poti: normal (Skala)')
+m.mem[0x3DE2] = 0; poti(0, 67, 120, shift=1, lock=1)
+check(m.mem[0x3DE2] == 10, 'Shift + grosses Poti mit Lock: Skala')
 m.mem[0x212f] = 1; flow.clear(); call('locktog')
 check(m.mem[0x212f] == 0 and flow == ['lock-weiter'], 'Lock im SEq-Spielmodus: keine Anzeige-Verriegelung')
 m.mem[0x2218] = 1; flow.clear(); call('locktog'); a = m.mem[0x212f]; call('locktog'); b = m.mem[0x212f]

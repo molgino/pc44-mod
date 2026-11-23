@@ -162,6 +162,11 @@ class AVR:
             elif m in ('z', 'y'):
                 p = self.Zr() if m == 'z' else (r[28] | r[29] << 8); self.wr(p, s)
             elif m == 'z+': self.wr(self.Zr(), s); self.setZ(self.Zr() + 1)
+            elif m == 'y+':
+                p = r[28] | r[29] << 8
+                self.wr(p, s)
+                p += 1
+                r[28], r[29] = p & 0xFF, p >> 8
             else: raise NotImplementedError(t)
         elif op == 'lpm':
             d = R(a[0])

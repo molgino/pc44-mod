@@ -9,9 +9,9 @@ TMP = tempfile.gettempdir()
 from pc44tool import decode
 from eesim import EEAVR
 from avrdis import dis
-ver = '25'
 seed = int(sys.argv[1]) if len(sys.argv) > 1 else 1
 n = int(sys.argv[2]) if len(sys.argv) > 2 else 1000
+shadow_edits = len(sys.argv) > 3 and sys.argv[3] == 'shadow'
 syx = os.path.join(TMP, '_pc44mod_irq.syx')
 import build as B
 with contextlib.redirect_stdout(io.StringIO()):
@@ -55,6 +55,10 @@ m.stubs.update({0xA9A: send3, 0x3AC0: clob, 0x407E: clob, 0x2E08: lambda mm: Non
                 0x1362: clob, 0x3E6A: clob, 0x3BFC: clob, 0x24E8: clob, 0x1686: clob, 0x2FA6: clob, 0x3C30: clob, 0x1466: clob, 0x5EBA: clob, 0x11EC: clob, 0x11F4: clob})
 m.call(LB['init']); m.mem[0x2218] = 8
 for i in range(64): m.mem[B.RAM['V'] + i] = random.choice([0, 100])
+if shadow_edits:
+    m.r[24] = 1
+    m.call(LB['pattern_select'])
+    m.call(LB['pattern_save'])
 m.mem[2] = 1
 for step in range(n):
     m.mem[0x3DCC] = random.choice([0, 1]); m.mem[0x0a07] = random.choice([0, 1])
@@ -63,12 +67,10 @@ for step in range(n):
     m.mem[0x3a56] = random.choice([random.randrange(64), 64, 66, 67]); v = random.randrange(128)
     m.mem[0x3aa7] = v; m.mem[0x3DF6] = v
     m.budget = 3
-    if ver >= '23':
-        m.r[10] = 0; m.r[24] = random.randrange(2); m.mem[0x2283] = random.choice([0, 0, 1]); m.mem[0x3a57] = random.choice([0, 0, 1]); m.call(LB['seqpoti'])
-    else:
-        m.call(LB['potisend'])
+    m.r[10] = 0; m.r[24] = random.randrange(2); m.mem[0x2283] = random.choice([0, 0, 1]); m.mem[0x3a57] = random.choice([0, 0, 1]); m.call(LB['seqpoti'])
     m.r[1] = 0
     m.mem[0x3de0] = (m.mem[0x3de0] + 1) & 255; m.budget = 3; m.call(LB['hook']); m.r[1] = 0
     m.mem[0x3DD4] = 5; m.mem[0x3DD8] = random.choice([0, 1, 2, 4, 7, 14]); m.budget = 3; m.call(LB['rendhook'])
     for _ in range(3): m.rd(0x1CF)
 print('Seed %d: %d Probleme' % (seed, len(bad)), sorted(set(bad))[:6])
+sys.exit(bool(bad))

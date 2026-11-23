@@ -176,6 +176,10 @@ def encode_line(op, args, pc, labels):
     if op == 'clr': return w(two(reg(a[0]), reg(a[0]), 0x2400))
     if op == 'tst': return w(two(reg(a[0]), reg(a[0]), 0x2000))
     if op == 'mov': return w(two(reg(a[0]), reg(a[1]), 0x2C00))
+    if op == 'movw':
+        d, source = map(reg, a)
+        assert d % 2 == source % 2 == 0
+        return w(0x0100 | (d // 2) << 4 | (source // 2))
     if op == 'add': return w(two(reg(a[0]), reg(a[1]), 0x0C00))
     if op == 'adc': return w(two(reg(a[0]), reg(a[1]), 0x1C00))
     if op == 'inc': return w(0x9403 | reg(a[0]) << 4)
@@ -208,27 +212,30 @@ def encode_line(op, args, pc, labels):
         assert a[1].lower() in ('z', 'z+')
         return w((0x9005 if a[1].lower() == 'z+' else 0x9004) | reg(a[0]) << 4)
     if op == 'ret': return w(0x9508)
-    if op == 'adiw':
+    if op in ('sec', 'clc'): return w(0x9408 if op == 'sec' else 0x9488)
+    if op in ('adiw', 'sbiw'):
         d, k = reg(a[0]), num(a[1], labels)
         assert d in (24, 26, 28, 30) and 0 <= k <= 63
-        return w(0x9600 | (k & 0x30) << 2 | ((d - 24) // 2) << 4 | (k & 0x0F))
+        return w((0x9600 if op == 'adiw' else 0x9700) | (k & 0x30) << 2 | ((d - 24) // 2) << 4 | (k & 0x0F))
     if op == 'and': return w(two(reg(a[0]), reg(a[1]), 0x2000))
     if op == 'cp': return w(two(reg(a[0]), reg(a[1]), 0x1400))
     if op == 'st':
-        m = {'x': 0x920C, 'x+': 0x920D, 'z+': 0x9201, 'z': 0x8200}[a[0].lower()]
+        m = {'x': 0x920C, 'x+': 0x920D, 'z+': 0x9201, 'z': 0x8200, 'y+': 0x9209}[a[0].lower()]
         return w(m | reg(a[1]) << 4)
     if op == 'ld':
-        m = {'z+': 0x9001, 'z': 0x8000, 'x': 0x900C, 'x+': 0x900D}[a[1].lower()]
+        m = {'z+': 0x9001, 'z': 0x8000, 'x': 0x900C, 'x+': 0x900D, 'y': 0x8008}[a[1].lower()]
         return w(m | reg(a[0]) << 4)
     if op == 'mul': return w(two(reg(a[0]), reg(a[1]), 0x9C00))
     if op == 'eor': return w(two(reg(a[0]), reg(a[1]), 0x2400))
     if op == 'or': return w(two(reg(a[0]), reg(a[1]), 0x2800))
     if op == 'swap': return w(0x9402 | reg(a[0]) << 4)
     if op == 'neg': return w(0x9401 | reg(a[0]) << 4)
+    if op == 'com': return w(0x9400 | reg(a[0]) << 4)
     if op == 'lsr': return w(0x9406 | reg(a[0]) << 4)
     if op == 'ror': return w(0x9407 | reg(a[0]) << 4)
     if op == 'dec': return w(0x940A | reg(a[0]) << 4)
     if op == 'sub': return w(two(reg(a[0]), reg(a[1]), 0x1800))
+    if op == 'sbc': return w(two(reg(a[0]), reg(a[1]), 0x0800))
     if op == 'rjmp':
         off = (num(a[0], labels) - (pc + 2)) // 2
         assert -2048 <= off <= 2047, 'rjmp zu weit'

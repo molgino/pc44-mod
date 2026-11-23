@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""PC44-Sequencer v25: Lock halten + Poti = Ctrl all (relativ, alle aktiven Steps der Spur).
+"""PC44-Sequencer v26: A/B-Patterns mit bar-quantisiertem Wechsel.
 
   python build.py PC44_V0101.syx PC44_seq.syx
 
-Spielmodus (Routing "SEq", Setup Taste 2):
+Spielmodus (Start direkt in "SEq"):
   Poti-Reihen 1+2 = Spur 1, 3+4 = Spur 2, 5+6 = Spur 3, 7+8 = Spur 4 (je 16 Steps)
   Poti allein:            Velocity, ganz links = Step aus          "u100" / "oFF"
   Taste 1 + Poti:         Tonhöhe in der Skala                     "nC4", "nF.3"
@@ -16,7 +16,8 @@ Spielmodus (Routing "SEq", Setup Taste 2):
   Lock + Poti (+Taste 1-5): Ctrl all: Parameter aller aktiven Steps der Spur relativ verschieben
   Taste 6 + Poti:         Spur löschen: Poti einer Spur ganz nach rechts  "CL 1" -> "CLr1"
   Taste 7 / 8:            Start (FA) / Stopp (FC), Clock nur während der Wiedergabe
-  Poti 65 / 67 / 68:      Shuffle / Grundton / Skala;  Poti 66 normaler Controller
+  Grosse Potis:           Velocity-Trim der Spuren 1–4
+  Shift + Poti 65/67/68:  Shuffle / Grundton / Skala
   Encoder:                Tempo 30..250 BPM ("t120")
 Edit-Seite (Shift + Edit im SEq-Modus):
   Poti einer Spur bewegen = Spur wählen;  Taste 1..6 = Parameter wählen, Encoder = Wert
@@ -26,14 +27,15 @@ Edit-Seite (Shift + Edit im SEq-Modus):
 Externe Clock: kommt MIDI-Clock (USB oder DIN), läuft der Sequencer synchron dazu,
   Start/Continue/Stop werden befolgt, Encoder zeigt "E120" (gemessen). Ohne Clock: interner Takt.
 Bedingung A:B = Step spielt nur im A-ten von je B Durchläufen der Spur.
-Speichern: automatisch ins EEPROM (ab 0x400), sobald ~2 s nichts mehr geändert wurde.
-Gesichert: alle Steps, Spur-Einstellungen, Mute, Skala, Grundton, Shuffle, Tempo. Auf diesem Chip behalten nur GPIOR0..3 Werte.
+Shift + Taste 1/2: A/B bearbeiten, 3: wechseln, 4: kopieren, 5: speichern, 6: Ctrl All rückgängig.
+Gesichert: alle Steps, Spur-Einstellungen und gemeinsame Einstellungen.
 """
 import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from pc44tool import decode, encode                       # noqa: E402
+import patterns
 from asm import assemble, encode_line, self_test   # noqa: E402
 
 BASE = 0x6D00
@@ -86,7 +88,6 @@ DIRNAMES = [(0x71, 0x5c, 0x50, 0x00), (0x50, 0x79, 0x1c, 0x00), (0x73, 0x10, 0x5
 
 
 EEBASE = 0x400            # Firmware nutzt EEPROM 0x010..0x11F
-EEPAUSE = 96              # Ticks Pause zwischen zwei Prüfdurchläufen (~2 s bei 120 BPM)
 MAGIC = (0x53, 20)
 EEREGIONS = [  # RAM-Adresse, Länge, Minimum, Maximum, Ersatzwert (ausserhalb -> Ersatzwert)
     (0x3C80, 64, 0, 127, 62),   # N Tonhöhe
@@ -115,7 +116,6 @@ EEREGIONS = [  # RAM-Adresse, Länge, Minimum, Maximum, Ersatzwert (ausserhalb -
 EESIZE = sum(r[1] for r in EEREGIONS)
 MAGOFF = 348
 assert sum(r[1] for r in EEREGIONS[:18]) == MAGOFF
-EENPG = (EESIZE + 31) // 32
 
 
 MODENAMES = [(0x54, 0x5c, 0x78, 0x79), (0x39, 0x74, 0x50, 0x5e), (0x73, 0x77, 0x5e, 0x00)]  # nOtE Chrd PAd
@@ -160,9 +160,14 @@ def seqtables():
 
 
 PATCHES = [
-    (0x415A, '97 30', 'cpi r25,0x09'),
-    (0x5BB2, '80 91 18 22', 'jmp rinc'),
-    (0x5BCE, '80 91 18 22', 'jmp rdec'),
+    (0x4156, '90 91 07 3a', 'jmp load_seq_routing'),
+    (0x5B00, '86 e0', 'ldi r24,0x08'),
+    (0x5CA4, '90 91 18 22', 'jmp lock_seq_routing'),
+    (0x5CB4, '80 91 18 22', 'jmp lock_seq_routing'),
+    (0x5DA8, '80 91 18 22', 'jmp 0x5dba'),
+    (0x5E60, '80 91 18 22', 'jmp 0x5e72'),
+    (0x5BB2, '80 91 18 22', 'jmp lock_seq_routing'),
+    (0x5BCE, '80 91 18 22', 'jmp lock_seq_routing'),
     (0x30E0, '80 e5 80 93', 'jmp rdisp'),
     (0x1F78, '80 91 f8 3b', 'jmp encw'),
     (0x2DE4, '20 91 56 3a', 'call loopend'),
@@ -282,8 +287,6 @@ init:
     ldi r18,MAG1
     sts MAGIC1,r18
     sts CLRF,r1
-    sts EEPG,r1
-    sts EEWAIT,r1
     ldi r18,PERLO
     sts INTPER,r18
     ldi r18,PERHI
@@ -319,6 +322,10 @@ INlx:
     dec r19
     brne INlx
     call eeload
+    call pattern_init
+    ldi r22,1
+    clr r24
+    clr r25
     jmp 0x407e
 
 fill64:
@@ -344,6 +351,7 @@ Hseq:
     call isseq
     tst r25
     breq Htick
+    call pattern_keys
     lds r24,0x2216
     tst r24
     breq Hb8
@@ -366,8 +374,15 @@ Hb8:
     call stopseq
 Hpush:
     lds r24,0x230e
+    lds r25,TEMPO_KEY
+    sts TEMPO_KEY,r24
     tst r24
     breq Htick
+    tst r25
+    brne Htick
+    lds r25,0x2283
+    tst r25
+    brne Htick
     sts 0x3dd8,r1
     ldi r24,0xff
     sts LEDROW,r24
@@ -406,11 +421,11 @@ Hrun:
     in r24,0x02
     tst r24
     breq Hnext
-    call seqtick
+    call pattern_tick
 Hnext:
-    call eetick
     rjmp Htick
 Hdisp:
+    call pattern_write_tick
     jmp 0x3ac0
 
 ; Display-Aufbau der Firmware (in 0x3AC0, Spielmodus): im SEq-Modus eigene Anzeige statt Wert
@@ -418,10 +433,16 @@ rendhook:
     call isseq
     tst r25
     breq RHorig
+    lds r24,SAVEPH
+    tst r24
+    brne RHpattern
     lds r24,0x3dd4
     tst r24
-    breq RHorig
+    breq RHpattern
     call showdisp
+    jmp 0x3e6a
+RHpattern:
+    call pattern_display
     jmp 0x3e6a
 RHorig:
     lds r18,0x2fe3
@@ -1145,6 +1166,7 @@ TEon:
     add r26,r19
     adc r27,r1
     ld r18,x
+    call trim_velocity
     push r18
     ldi r26,lo8(L)
     ldi r27,hi8(L)
@@ -1284,6 +1306,20 @@ stopseq:
     call SEND3
 SPnc:
     out 0x02,r1
+    call flushnotes
+    ldi r26,lo8(MREQ)
+    ldi r27,hi8(MREQ)
+    ldi r30,lo8(MUTE)
+    ldi r31,hi8(MUTE)
+    ldi r19,0x04
+SPm:
+    ld r18,x+
+    st z+,r18
+    dec r19
+    brne SPm
+    ret
+
+flushnotes:
     sts OFF,r1
     sts OFF1,r1
     sts OFF2,r1
@@ -1297,16 +1333,6 @@ SPloop:
     cpi r16,0x04
     brne SPloop
     pop r16
-    ldi r26,lo8(MREQ)
-    ldi r27,hi8(MREQ)
-    ldi r30,lo8(MUTE)
-    ldi r31,hi8(MUTE)
-    ldi r19,0x04
-SPm:
-    ld r18,x+
-    st z+,r18
-    dec r19
-    brne SPm
     ret
 
 ; Start: FA senden, alle Spuren auf Anfang, Wiedergabe an
@@ -1317,6 +1343,7 @@ seqstart:
     ldi r24,0xfa
     call SEND3
 SSq:
+    sts BARPOS,r1
     call posreset
     ldi r24,0x0f
     out 0x00,r24
@@ -1389,13 +1416,20 @@ PSed1:
     sts EDTRK,r24
     jmp 0x136e
 PSplay:
+    lds r24,SAVEPH
+    cpi r24,1
+    brcs PSeditable
+    cpi r24,PPROMOTE
+    brcc PSeditable
+    jmp PSend
+PSeditable:
     lds r24,0x3a56
     lds r20,0x2283
     tst r20
     breq PSnsh
     cpi r24,64
     brcs PSsh
-    jmp PSend
+    rjmp PSglobals
 PSsh:
     lds r18,RAWVAL
     lds r19,PREV
@@ -1428,6 +1462,8 @@ PSnsh:
 PSnlk:
     cpi r24,64
     brcs PSseq
+    jmp PStrim
+PSglobals:
     cpi r24,POTSWING
     brne PSn0
     jmp PSswing
@@ -1437,7 +1473,9 @@ PSn0:
     jmp PSscale
 PSn1:
     cpi r24,POTROOT
-    brne PSorig
+    breq PSrootgo
+    jmp PSend
+PSrootgo:
     jmp PSroot
 PSorig:
     lds r22,0x2284
@@ -1447,6 +1485,7 @@ PSseq:
     mov r19,r24
     andi r19,0xf8
     sts LEDROW,r19
+    sts LASTROW,r19
     ldi r20,HOLD
     sts 0x3dd4,r20
     ldi r25,0x02
@@ -1554,8 +1593,6 @@ PS5r:
     ldi r27,hi8(R)
     rjmp PSstore
 PS9:
-    cpi r25,0x0c
-    breq PS9go
     cpi r25,0x0d
     breq PS9c
     cpi r25,0x0f
@@ -1573,11 +1610,6 @@ PS9n:
     ldi r26,lo8(NUDGE)
     ldi r27,hi8(NUDGE)
     jmp PSstore
-PS9go:
-    ldi r20,0x00
-    cpi r18,64
-    brcs PSmu
-    ldi r20,0x01
 PSmu:
     mov r21,r24
     swap r21
@@ -1598,43 +1630,6 @@ PSmu:
 PSmu2:
     sts 0x3dd9,r21
     jmp PSend
-PS9x:
-    cpi r25,0x0b
-    brne PS9b
-    mov r20,r18
-    lsr r20
-    lsr r20
-    lsr r20
-    inc r20
-    mov r21,r24
-    swap r21
-    andi r21,0x0f
-    ldi r26,lo8(TLEN)
-    ldi r27,hi8(TLEN)
-    add r26,r21
-    adc r27,r1
-    st x,r20
-    sts 0x3dd9,r20
-    jmp PSend
-PS9b:
-    cpi r25,0x09
-    brne PS6
-    ldi r20,0x07
-    mul r18,r20
-    add r0,r0
-    adc r1,r1
-    mov r20,r1
-    clr r1
-    mov r21,r24
-    swap r21
-    andi r21,0x0f
-    ldi r26,lo8(OCT)
-    ldi r27,hi8(OCT)
-    add r26,r21
-    adc r27,r1
-    st x,r20
-    sts 0x3dd9,r20
-    jmp PSend
 PS6:
     mov r20,r18
     lsr r20
@@ -1643,6 +1638,22 @@ PS6:
     ldi r26,lo8(L)
     ldi r27,hi8(L)
     rjmp PSstore
+PStrim:
+    subi r24,64
+    ldi r26,lo8(VTRIM)
+    ldi r27,hi8(VTRIM)
+    add r26,r24
+    adc r27,r1
+    lds r18,RAWVAL
+    st x,r18
+    sts 0x3dd9,r18
+    ldi r20,0x10
+    sts 0x3dd8,r20
+    ldi r20,0xff
+    sts LEDROW,r20
+    ldi r20,HOLD
+    sts 0x3dd4,r20
+    jmp PSend
 PSscale:
     lds r18,RAWVAL
     ldi r20,0x07
@@ -1838,6 +1849,7 @@ PAm2:
     mov r20,r21
     andi r20,0xf8
     sts LEDROW,r20
+    sts LASTROW,r20
     mov r23,r25
     cpi r23,0x01
     brne PAq0
@@ -1901,6 +1913,7 @@ PAgo:
     andi r20,0xf0
     add r26,r20
     adc r27,r1
+    call pattern_undo_capture
     ldi r30,lo8(V)
     ldi r31,hi8(V)
     add r30,r20
@@ -1986,8 +1999,8 @@ SQ2:
     lds r21,0x3a56
     cpi r21,68
     brcc SQorig
-    cpi r21,65
-    breq SQorig
+    lds r23,PATPICKUP
+    or r24,r23
     sts SNAPF,r24
     ldi r26,lo8(RAWLAST)
     ldi r27,hi8(RAWLAST)
@@ -2215,24 +2228,38 @@ RCorig:
     lds r20,0x3aa7
     jmp 0x133a
 
-; Poti-Stellung r18 (0..127) -> MIDI-Note r18 in der aktuellen Skala (verändert r0,r1,r20,r21,r30,r31)
-tunenote:
+; Shared quantizer: raw pot r18 -> scale degree r20, preserving r18.
+note_degree:
+    ldi r30,lo8(ntab)
+    ldi r31,hi8(ntab)
     lds r20,SCALE
-    ldi r21,128
-    mul r20,r21
-    ldi r30,lo8(tunetab)
-    ldi r31,hi8(tunetab)
+    add r30,r20
+    adc r31,r1
+    call lpmz
+    mul r18,r20
+    add r0,r0
+    adc r1,r1
+    mov r20,r1
+    clr r1
+    ret
+
+; Convert the degree through the same interval table used for chords.
+tunenote:
+    call note_degree
+    lds r21,SCALE
+    ldi r30,DEGW
+    mul r21,r30
+    ldi r30,lo8(degtab)
+    ldi r31,hi8(degtab)
     add r30,r0
     adc r31,r1
     clr r1
-    add r30,r18
+    add r30,r20
     adc r31,r1
-    lds r21,0x01ca
-    sts 0x01ca,r1
-    lpm r18,z
-    sts 0x01ca,r21
-    lds r21,ROOT
-    add r18,r21
+    call lpmz
+    lds r18,ROOT
+    add r18,r20
+    subi r18,BASE_NOTE_NEG
     ret
 
 ; Alle Spuren auf "vor Step 1": POS/TSUB = 0xFF, Step- und Durchlaufzähler 0, Pingpong aufwärts
@@ -2324,7 +2351,9 @@ ledhook:
     brne LHplay
     call isedit
     tst r25
-    breq LHorig
+    brne LHedit
+    rjmp LHorig
+LHedit:
     lds r24,EDPAR
     dec r24
     ldi r30,0xf9
@@ -2343,12 +2372,16 @@ LHe2:
     brne LHe
     rjmp LHorig
 LHplay:
+    lds r24,0x2283
+    tst r24
+    brne LHpatterns
     lds r24,0x3dd4
     tst r24
     breq LHrun
     lds r24,LEDROW
     cpi r24,0xff
     breq LHrun
+LHrow:
     ldi r26,lo8(V)
     ldi r27,hi8(V)
     add r26,r24
@@ -2370,7 +2403,10 @@ LHg2:
 LHrun:
     in r24,0x02
     tst r24
-    breq LHorig
+    brne LHplayhead
+    lds r24,LASTROW
+    rjmp LHrow
+LHplayhead:
     in r24,0x00
     andi r24,0x07
     ldi r30,0xf9
@@ -2387,6 +2423,30 @@ LHr2:
     inc r20
     dec r21
     brne LHr
+    rjmp LHorig
+; While Shift is held, LEDs 1/2 show the playing slot (bright) and edit
+; slot (dim if different). LED 3 lights while a switch is queued.
+LHpatterns:
+    ldi r26,0xf9
+    ldi r27,0x3b
+    ldi r21,8
+LHclear:
+    st x+,r1
+    dec r21
+    brne LHclear
+    ldi r27,0x3b
+    lds r26,EDITPAT
+    subi r26,7
+    ldi r24,1
+    st x,r24
+    lds r26,PLAYPAT
+    subi r26,7
+    ldi r24,3
+    st x,r24
+    lds r25,QUEUEPAT
+    cpi r25,0xff
+    breq LHorig
+    sts 0x3bfb,r24
 LHorig:
     sts 0x31a8,r15
     jmp 0x3bfc
@@ -2590,8 +2650,14 @@ SD4:
     lds r18,0x3dd9
 SD5:
     cpi r24,0x05
-    brne SDw
+    brne SDtrim
     ldi r25,0x50
+    lds r18,0x3dd9
+    rjmp SDw
+SDtrim:
+    cpi r24,0x10
+    brne SDw
+    ldi r25,0x3d
     lds r18,0x3dd9
 SDw:
     sts 0x2fe6,r25
@@ -2803,6 +2869,12 @@ Eseq:
     tst r24
     breq Eret
     sts 0x3bf8,r1
+    lds r24,SAVEPH
+    cpi r24,1
+    brcs Etempo
+    cpi r24,PPROMOTE
+    brcs Eret
+Etempo:
     lds r24,EXT
     tst r24
     brne Eshow
@@ -2947,6 +3019,13 @@ SEbn:
     ret
 SEenc:
     sts 0x3bf8,r1
+    lds r24,SAVEPH
+    cpi r24,1
+    brcs SEeditable
+    cpi r24,PPROMOTE
+    brcc SEeditable
+    ret
+SEeditable:
     lds r25,0x213e
     lds r18,EDPAR
     lds r19,EDTRK
@@ -3152,47 +3231,18 @@ ES6d:
     sts 0x01ca,r21
     jmp dispcopy
 
-; ================================================================ Setup Taste 2: Routing-Auswahl mit "SEq"
-rinc:
-    lds r24,ROUTING
-    cpi r24,SEQ
-    brcc RIret
-    ldi r25,0x01
-    cpi r24,0x02
-    breq RI2
-    cpi r24,0x06
-    brne RI1
-RI2:
-    ldi r25,0x02
-RI1:
-    sts 0x3aa7,r25
-    add r24,r25
-    sts ROUTING,r24
-RIret:
-    ret
+; Keep SEq in RAM across setup loads and encoder changes. The two setup
+; exits skip the stock route write so reflashing restores the user's choice.
+load_seq_routing:
+    call lock_seq_routing
+    jmp 0x416a
 
-rdec:
-    lds r24,ROUTING
-    tst r24
-    breq RDret
-    ldi r25,0x01
-    cpi r24,0x04
-    breq RD2
-    cpi r24,SEQ
-    brne RD1
-RD2:
-    ldi r25,0x02
-RD1:
-    sts 0x3aa7,r25
-    sub r24,r25
+lock_seq_routing:
+    ldi r24,SEQ
     sts ROUTING,r24
-RDret:
     ret
 
 rdisp:
-    lds r24,ROUTING
-    cpi r24,SEQ
-    brne RDnorm
     ldi r24,0x6d
     sts 0x2fe6,r24
     ldi r24,0x79
@@ -3200,17 +3250,6 @@ rdisp:
     ldi r24,0x67
     sts 0x2fe8,r24
     sts 0x2fe9,r1
-    jmp 0x3a18
-RDnorm:
-    ldi r24,0x50
-    sts 0x2fe6,r24
-    ldi r24,0x5c
-    sts 0x2fe7,r24
-    ldi r24,0x1c
-    sts 0x2fe8,r24
-    lds r24,ROUTING
-    call DIGIT
-    sts 0x2fe9,r24
     jmp 0x3a18
 
 ; TCE0-Überlauf: nur Ticks zählen (Hauptschleife arbeitet sie nach)
@@ -3510,22 +3549,13 @@ COgo:
     ldi r18,24
     add r14,r18
 COk:
-    lds r18,SCALE
-    ldi r30,lo8(ntab)
-    ldi r31,hi8(ntab)
-    add r30,r18
-    adc r31,r1
-    call lpmz
     ldi r26,lo8(N)
     ldi r27,hi8(N)
     add r26,r29
     adc r27,r1
     ld r18,x
-    mul r18,r20
-    add r0,r0
-    adc r1,r1
-    mov r28,r1
-    clr r1
+    call note_degree
+    mov r28,r20
     clr r16
 COl:
     ldi r30,lo8(chotab)
@@ -3570,7 +3600,9 @@ COsend:
     ldi r27,hi8(V)
     add r26,r29
     adc r27,r1
-    ld r20,x
+    ld r18,x
+    call trim_velocity
+    mov r20,r18
     ldi r30,lo8(CHN)
     ldi r31,hi8(CHN)
     add r30,r17
@@ -3638,6 +3670,11 @@ degtab:
 imgptr:
     ldi r30,lo8(eetab)
     ldi r31,hi8(eetab)
+    rjmp region_addr
+pattern_addr:
+    ldi r30,lo8(pattern_regions)
+    ldi r31,hi8(pattern_regions)
+region_addr:
     lds r19,0x01ca
     sts 0x01ca,r1
 IPl:
@@ -3659,16 +3696,6 @@ IPfound:
     add r26,r24
     adc r27,r1
     sts 0x01ca,r19
-    ret
-
-; Abbild-Byte r24:r25 aus dem RAM -> r18 (r24,r25 bleiben)
-eeram:
-    push r24
-    push r25
-    call imgptr
-    ld r18,x
-    pop r25
-    pop r24
     ret
 
 ; Beim Einschalten: gültiges Abbild aus dem EEPROM übernehmen (Werte begrenzt)
@@ -3714,6 +3741,13 @@ ELok:
     ldi r24,hi8(EESIZE)
     cpc r29,r24
     brne ELl
+    call apply_settings
+ELx:
+    pop r29
+    pop r28
+    ret
+
+apply_settings:
     ldi r26,lo8(MREQ)
     ldi r27,hi8(MREQ)
     ldi r30,lo8(MUTE)
@@ -3741,170 +3775,6 @@ ELm:
     sts 0x0a27,r21
     sts INTPER,r20
     sts INTPER1,r21
-ELx:
-    pop r29
-    pop r28
-    ret
-
-; Pro Tick: eine EEPROM-Seite (32 Byte) prüfen. Geschrieben wird nur, wenn sie sich vom
-; EEPROM unterscheidet und seit dem letzten Durchlauf (~2 s) unverändert ist.
-eetick:
-    lds r24,EEWAIT
-    tst r24
-    breq ETgo
-    dec r24
-    sts EEWAIT,r24
-    ret
-ETgo:
-    lds r24,0x01cf
-    sbrc r24,7
-    ret
-    push r15
-    push r16
-    push r17
-    push r28
-    push r29
-    lds r24,0x01cc
-    ori r24,0x08
-    sts 0x01cc,r24
-    lds r17,EEPG
-    ldi r24,32
-    mul r17,r24
-    mov r28,r0
-    mov r29,r1
-    clr r1
-    clr r16
-    clr r15
-ETl:
-    mov r24,r28
-    mov r25,r29
-    call eeram
-    add r16,r16
-    adc r16,r1
-    add r16,r18
-    mov r30,r28
-    mov r31,r29
-    ldi r20,lo8(EEMAP)
-    ldi r21,hi8(EEMAP)
-    add r30,r20
-    adc r31,r21
-    ld r19,z
-    cp r19,r18
-    breq ETsame
-    inc r15
-ETsame:
-    adiw r28,1
-    cpi r28,lo8(EESIZE)
-    ldi r24,hi8(EESIZE)
-    cpc r29,r24
-    breq ETend
-    mov r24,r28
-    andi r24,0x1f
-    brne ETl
-ETend:
-    ldi r26,lo8(EESUM)
-    ldi r27,hi8(EESUM)
-    add r26,r17
-    adc r27,r1
-    ld r24,x
-    st x,r16
-    cp r24,r16
-    brne ETnext
-    tst r15
-    breq ETnext
-    mov r24,r17
-    call eewrpage
-ETnext:
-    inc r17
-    cpi r17,EENPG
-    brcs ETst
-    clr r17
-    ldi r24,EEPAUSE
-    sts EEWAIT,r24
-ETst:
-    sts EEPG,r17
-    pop r29
-    pop r28
-    pop r17
-    pop r16
-    pop r15
-    ret
-
-; Seite r24 komplett in den Seitenpuffer laden und mit Löschen+Schreiben starten (wartet nicht)
-eewrpage:
-    push r16
-    push r17
-    push r28
-    push r29
-    ldi r25,32
-    mul r24,r25
-    mov r28,r0
-    mov r29,r1
-    clr r1
-    lds r24,0x01cc
-    andi r24,0xf7
-    sts 0x01cc,r24
-    lds r24,0x01cf
-    sbrs r24,1
-    rjmp EWld
-    in r16,0x3f
-    cli
-    lds r17,0x01ca
-    ldi r24,0x36
-    sts 0x01ca,r24
-    ldi r24,0xd8
-    ldi r25,0x01
-    out 0x34,r24
-    sts 0x01cb,r25
-    sts 0x01ca,r17
-    out 0x3f,r16
-EWb:
-    lds r24,0x01cf
-    sbrc r24,7
-    rjmp EWb
-EWld:
-    ldi r17,32
-EWl:
-    mov r24,r28
-    mov r25,r29
-    ldi r18,0xff
-    cpi r24,lo8(EESIZE)
-    ldi r19,hi8(EESIZE)
-    cpc r25,r19
-    brcc EWff
-    call eeram
-EWff:
-    ldi r20,lo8(EEBASE)
-    ldi r21,hi8(EEBASE)
-    add r24,r20
-    adc r25,r21
-    in r16,0x3f
-    cli
-    lds r19,0x01ca
-    ldi r20,0x33
-    sts 0x01ca,r20
-    sts 0x01c0,r24
-    sts 0x01c1,r25
-    sts 0x01c2,r1
-    sts 0x01c4,r18
-    sts 0x01ca,r19
-    out 0x3f,r16
-    adiw r28,1
-    dec r17
-    brne EWl
-    in r16,0x3f
-    cli
-    ldi r24,0x35
-    sts 0x01ca,r24
-    ldi r24,0xd8
-    ldi r25,0x01
-    out 0x34,r24
-    sts 0x01cb,r25
-    out 0x3f,r16
-    pop r29
-    pop r28
-    pop r17
-    pop r16
     ret
 
 eetab:
@@ -3913,8 +3783,6 @@ pertab:
     .byte PERTAB
 scnames:
     .byte SCNAMES
-tunetab:
-    .byte TUNETAB
 lentab:
     .byte LENTAB
 lendisp:
@@ -3951,10 +3819,13 @@ def main(src, dst):
     self_test()
     hdr, img = decode(open(src, 'rb').read())
     img = bytearray(img)
-    assert len(img) == BASE, 'unerwartete Abbildlänge'
-    for adr, orig, _ in PATCHES:
+    if len(img) != BASE:
+        raise ValueError('Unexpected firmware image length')
+    patches = PATCHES + patterns.PATCHES
+    for adr, orig, _ in patches:
         got = img[adr:adr + len(bytes.fromhex(orig))].hex(' ')
-        assert got == orig, 'Original an 0x%04X ist %s, erwartet %s' % (adr, got, orig)
+        if got != orig:
+            raise ValueError(f'Firmware bytes at 0x{adr:04X}: got {got}, expected {orig}')
 
     pertab = []
     for b in range(BPM_MIN, BPM_MAX + 1):
@@ -3983,12 +3854,11 @@ def main(src, dst):
         TUNEDEF=TUNE_DEFAULT, NSCALES=len(SCALES), SCALE=0x3DE2, LEDROW=0x3DE3,
         V4=RAM['V'] + 4, V8=RAM['V'] + 8, V12=RAM['V'] + 12,
         SCNAMES=', '.join(str(c) for n, _ in SCALES for c in n),
-        TUNETAB=', '.join(map(str, tunetable())),
+        BASE_NOTE_NEG=256 - BASE_NOTE,
         ACT1=RAM['ACT'] + 1, ACT2=RAM['ACT'] + 2, ACT3=RAM['ACT'] + 3,
-        EEBASE=EEBASE, EEMAP=0x1000 + EEBASE, EESIZE=EESIZE, EENPG=EENPG, EEPAUSE=EEPAUSE,
+        EEBASE=EEBASE, EEMAP=0x1000 + EEBASE, EESIZE=EESIZE,
         EEMAGA=0x1000 + EEBASE + MAGOFF, EEMAGB=0x1000 + EEBASE + MAGOFF + 1,
         MAG0=MAGIC[0], MAG1=MAGIC[1], MAGIC=0x3E04, MAGIC1=0x3E05, CLRF=0x3E06,
-        EEPG=0x3DF7, EEWAIT=0x3E07, EESUM=0x3ED0,
         EETAB=', '.join('%d, %d, %d, %d, %d, %d' % (a & 0xFF, a >> 8, n, lo, hi, d) for a, n, lo, hi, d in EEREGIONS),
         MODE=0x3DC8, EXT=0x3DCC, EXTFIRST=0x3DCD, EXTCMD=0x3DCE, EXTSYNC=0x3DCF, EXTN=0x3DD0,
         EXTSUM=0x3DD1, EXTSUM1=0x3DD2, EXTTOT=0x3E08, EXTTOT1=0x3E09, INTPER=0x3E0A, INTPER1=0x3E0B,
@@ -4000,11 +3870,11 @@ def main(src, dst):
         CHOTAB=', '.join(str(c) for t in CHORD_SCALE + CHORD_CHROM for c in t),
         NTAB=', '.join(map(str, degtables()[1] + [0] * (len(degtables()[1]) % 2))), DEGTAB=', '.join(map(str, degtables()[0])),
         **RAM)
-    assert EENPG <= 16 and EEBASE + EENPG * 32 <= 0x800
-    code, labels = assemble(ASM, BASE, consts)
+    consts.update(patterns.CONSTS)
+    code, labels = assemble(patterns.ASM + ASM, BASE, consts)
     print('Neuer Code + Tabellen: %d Bytes ab 0x%04X' % (len(code), BASE))
 
-    for adr, orig, line in PATCHES:
+    for adr, orig, line in patches:
         op, _, args = line.partition(' ')
         new = encode_line(op, args, adr, labels)
         assert len(new) == len(bytes.fromhex(orig))
