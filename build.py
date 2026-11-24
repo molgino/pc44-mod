@@ -17,7 +17,7 @@ Spielmodus (Start direkt in "SEq"):
   Taste 6 + Poti:         Spur löschen: Poti einer Spur ganz nach rechts  "CL 1" -> "CLr1"
   Taste 7 / 8:            Start (FA) / Stopp (FC), Clock nur während der Wiedergabe
   Grosse Potis:           Velocity-Trim der Spuren 1–4
-  Shift + Poti 65/67/68:  Shuffle / Grundton / Skala
+  Shift + Poti 65/67/68:  Shuffle / Grundton und Skala des Edit-Patterns
   Encoder:                Tempo 30..250 BPM ("t120")
 Edit-Seite (Shift + Edit im SEq-Modus):
   Poti einer Spur bewegen = Spur wählen;  Taste 1..6 = Parameter wählen, Encoder = Wert
@@ -174,6 +174,7 @@ PATCHES = [
     (0x135E, '60 91 84 22', 'jmp potisend'),
     (0x3C2C, '20 91 e3 2f', 'jmp rendhook'),
     (0x3BF8, 'f0 92 a8 31', 'jmp ledhook'),
+    (0x3E9A, '80 91 2f 21', 'call lock_indicator'),
     (0x00BC, '6b c0 00 00', 'jmp tce0isr'),
     (0x1074, '20 93 a7 3a', 'call rawsave'),
     (0x1336, '40 91 a7 3a', 'jmp rawcmp'),
@@ -1979,6 +1980,18 @@ LT1:
     sts 0x212f,r24
     jmp 0x5eba
 
+; The stock Lock LED uses the display latch. In sequencer play mode it
+; follows the physical Lock button used for Ctrl All.
+lock_indicator:
+    call isseq
+    tst r25
+    breq LIstock
+    lds r24,0x3a57
+    ret
+LIstock:
+    lds r24,0x212f
+    ret
+
 ; ================================================================ Einstieg aller Poti-Bewegungen (Firmware 0x11E8)
 ; Hier verzweigt die Firmware in Shift / Snap / Jump. Im SEq-Spielmodus übernehmen die Step-Potis und die
 ; Potis 65/67/68 komplett: eigene Änderungserkennung, eigenes Snap, Shift = Mute. r24 = Poti-Modus (0 = Jump).
@@ -2370,7 +2383,7 @@ LHe2:
     inc r20
     dec r21
     brne LHe
-    rjmp LHorig
+    rjmp LHheld
 LHplay:
     lds r24,0x2283
     tst r24
@@ -2399,7 +2412,7 @@ LHg2:
     st z+,r19
     dec r21
     brne LHg
-    rjmp LHorig
+    rjmp LHheld
 LHrun:
     in r24,0x02
     tst r24
@@ -2423,7 +2436,7 @@ LHr2:
     inc r20
     dec r21
     brne LHr
-    rjmp LHorig
+    rjmp LHheld
 ; While Shift is held, LEDs 1/2 show the playing slot (bright) and edit
 ; slot (dim if different). LED 3 lights while a switch is queued.
 LHpatterns:
@@ -2445,8 +2458,25 @@ LHclear:
     st x,r24
     lds r25,QUEUEPAT
     cpi r25,0xff
-    breq LHorig
+    breq LHheld
     sts 0x3bfb,r24
+LHheld:
+    ; Show pressed keys over the pattern, step, and track-edit indicators.
+    ldi r26,0xf9
+    ldi r27,0x3b
+    ldi r30,0x0f
+    ldi r31,0x23
+    ldi r21,8
+    ldi r24,3
+LHkey:
+    ld r18,z+
+    tst r18
+    breq LHknext
+    st x,r24
+LHknext:
+    adiw r26,1
+    dec r21
+    brne LHkey
 LHorig:
     sts 0x31a8,r15
     jmp 0x3bfc

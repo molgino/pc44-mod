@@ -18,11 +18,12 @@ This build runs in **`SEq`** mode. The setup routing control stays fixed to the 
 |---|---|
 | Per step | velocity, pitch (scale-based), note length (1/12 … 16 steps), probability 10–100 % and conditions 1:2 … 8:8, ratchet 1–4, chord type, nudge (microtiming ±½ step) |
 | Per track (edit page) | pattern length 1–16, octave, speed ×1/8 … ×2, MIDI channel, direction (forward, backward, ping-pong, random), mode note / chord / pad |
-| Global | tempo 30–250 BPM, shuffle, root note, 11 scales |
+| Per pattern | root note and 11 scales |
+| Global | tempo 30–250 BPM and shuffle |
 | Live | bar-quantized A/B switching, track mute, four velocity trims, clear track, and reversible **Ctrl All** |
 | Clock | internal clock with MIDI clock output, or automatically synced to external MIDI clock (USB/DIN), start/continue/stop |
 | Memory | two explicitly saved EEPROM slots with interrupted-save recovery |
-| Snap/Jump | firmware pot mode applies until you change the edit slot, then pickup applies to step and global parameter edits for the session |
+| Snap/Jump | firmware pot mode applies until you change the edit slot, then pickup applies to step, tuning, and shuffle edits for the session |
 
 ## A/B performance workflow
 
@@ -33,18 +34,18 @@ Hold **Shift** and press a numbered key in the sequencer play screen.
 | 1 / 2 | Edit A / B. You can edit either slot while the other plays. |
 | 3 | Switch playback between A and B. While playing, the switch occurs at the next 4/4 bar boundary and all four tracks restart together. Press again before the boundary to cancel. While stopped, the switch is immediate. |
 | 4 | Copy the playing slot to the other slot and select the copy for editing. |
-| 5 | Save the slot you are editing, along with the shared tempo, scale, root, shuffle, and mute settings. Wait for `SAVE` to clear before switching the unit off. |
+| 5 | Save the slot you are editing, along with the shared tempo, shuffle, and mute settings. Wait for `SAVE` to clear before switching the unit off. |
 | 6 | Revert the most recent **Ctrl All** gesture with its original slot selected for editing. |
 
 Start a groove in A with key **7**. Use **Shift + 4** to copy it to B, then turn the step pots to make a variation. Use **Shift + 3** to launch B. To return to A, press **Shift + 3** again. Key **8** stops playback. Holding Shift while turning a step pot still controls track mute.
 
-The four large pots trim the playback velocity of tracks 1–4, with unity gain at the center. Trim leaves stored step velocities intact. Hold **Shift** and turn large pots 1, 3, and 4 to set shuffle, root, and scale.
+The four large pots trim the playback velocity of tracks 1–4, with unity gain at the center. Trim leaves stored step velocities intact. Hold **Shift** and turn large pot 1 for shared shuffle, pot 3 for the edit slot's root, and pot 4 for its scale. Root and scale follow the pattern being edited. Editing the inactive slot leaves the playing slot’s tuning intact. Copying a pattern also copies its tuning.
 
 The idle display shows the playing slot in the first digit and the edit slot in the fourth. The third digit shows a queued slot with its decimal point lit. For example, `A- b` means A plays and B is being edited. `A-b.b` means B is queued and is also the edit slot.
 
-Hold **Shift** to see the pattern status on the numbered LEDs. LEDs **1** and **2** represent A and B. The playing slot is bright and the edit slot is dim if it differs. LED **3** lights while a switch is queued. When stopped, the LEDs show the active steps in the last row you touched.
+Hold **Shift** to see the pattern status on the numbered LEDs. LEDs **1** and **2** represent A and B. The playing slot is bright and the edit slot is dim if it differs. LED **3** lights while a switch is queued. When stopped, the LEDs show the active steps in the last row you touched. A numbered key lights at full brightness while held, including when another key is already down. Hold **Lock** and turn a step pot for **Ctrl All**. The dedicated Lock LED lights while you hold it in the play view. **Shift + Lock** opens and closes the track edit page.
 
-At boot, A is selected. A saved pattern from earlier releases is imported as A. Until B has a saved version, it starts as a copy of A. Use **Shift + 5** in each slot to keep both versions across a reboot.
+At boot, A is selected. A saved pattern from earlier releases is imported as A. Until B has a saved version, it starts as a copy of A. Use **Shift + 5** in each slot to keep both versions across a reboot. Existing A/B saves keep the root and scale stored when each slot was last saved.
 
 The older [German manual](docs/PC44_SEq_Anleitung.pdf) covers the original step editing and track parameters. Use the controls above for startup, pattern switching, and saving in this build.
 

@@ -23,10 +23,11 @@ PATTERN_REGIONS = [
     (0x3E67, 1, 0, 15, 3),
     (0x3E68, 4, 0, 3, 0),     # direction
     (0x3DC8, 4, 0, 2, 0),     # mode
-]
-GLOBALS = [
+    # Keep these at their original offsets so saved A/B images still load.
     (0x3DE2, 1, 0, 10, 0),    # scale
     (0x3DE8, 1, 0, 11, 0),    # root
+]
+GLOBALS = [
     (0x3DED, 1, 0, 6, 0),     # shuffle
     (0x0003, 1, 30, 250, 120),  # internal tempo
     (0x3E84, 4, 0, 1, 0),     # requested mute
@@ -170,7 +171,7 @@ PBcopy:
     ret
 
 ; Shift + 1/2 edit A/B, 3 switches playback, 4 copies, 5 saves, 6 reverts.
-; Latch the gesture until the numbered keys are released.
+; Track held keys independently so a new press works while another is held.
 pattern_keys:
     lds r18,0x3a57
     tst r18
@@ -182,22 +183,38 @@ PKshift:
     breq PKrelease
     ldi r26,0x0f
     ldi r27,0x23
+    lds r18,PATKEY
+    ldi r20,1
+    clr r21
+    clr r22
     ldi r24,1
 PKscan:
-    ld r18,x+
-    tst r18
-    brne PKpressed
+    ld r19,x+
+    tst r19
+    breq PKnext
+    or r21,r20
+    mov r19,r18
+    and r19,r20
+    brne PKnext
+    tst r22
+    brne PKnext
+    mov r22,r24
+    or r18,r20
+PKnext:
+    add r20,r20
     inc r24
     cpi r24,7
     brne PKscan
+    and r18,r21
+    sts PATKEY,r18
+    mov r24,r22
+    tst r24
+    brne PKpressed
+    ret
 PKrelease:
     sts PATKEY,r1
     ret
 PKpressed:
-    lds r18,PATKEY
-    tst r18
-    brne PKret
-    sts PATKEY,r24
     cpi r24,3
     breq PKqueue
     lds r18,SAVEPH
@@ -409,16 +426,16 @@ PIclone:
     lds r19,SAVEGENHI
     mov r18,r21
     sbc r18,r19
-    breq PIsteps
+    breq PIpattern
     sbrc r18,7
-    rjmp PIsteps
+    rjmp PIpattern
 PIglobals:
     sts SAVEGEN,r25
     sts SAVEGENHI,r21
     ldi r24,lo8(PSAVED)
     ldi r25,hi8(PSAVED)
     rjmp PIloadB
-PIsteps:
+PIpattern:
     ldi r24,lo8(PSIZE)
     ldi r25,hi8(PSIZE)
 PIloadB:

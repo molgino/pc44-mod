@@ -18,6 +18,7 @@ from pc44tool import decode
 def run_suite(flash, labels):
     events = []
     v = build.RAM['V']
+    scale, root = 0x3de2, 0x3de8
     c = patterns.CONSTS
     a, b = patterns.SLOTS
     journal_header = patterns.JOURNAL + patterns.HEADER_OFFSET
@@ -102,13 +103,13 @@ def run_suite(flash, labels):
     del m.stubs[0x3ac0], m.stubs[0x3e6a]
     m.stubs.update({address: lambda _: None for address in (0xc36, 0xe92, 0x69d2)})
 
-    def panel(shift=False, number=1, down=False, encoder=False):
+    def panel(shift=False, number=1, down=False, encoder=False, lock=False):
         m.mem[0x3a47] = 12
         m.mem[0x3a9d] = 4  # First encoder-switch ADC sample after the 68 pots.
         m.mem[0x0210] = 0 if encoder else 0xff
         m.call(0x11c)
         assert m.mem[0x2fa3] == m.mem[0x0210]
-        m.mem[0x0668] = 0xfd if shift else 0xff
+        m.mem[0x0668] = 0xff ^ (0x02 if shift else 0) ^ (0x10 if lock else 0)
         m.mem[0x0648] = 0 if down else 0x80
         m.mem[0x3a9d] = 0x10 + number - 1
         m.call(0x38)
@@ -134,6 +135,49 @@ def run_suite(flash, labels):
         m.mem[0x3a9d] = 7 + 8 * key_index
         m.call(0x38)
         assert m.mem[0x0664] & 1 == expected
+    for number in range(1, 9):
+        panel(number=number, down=True)
+        assert m.mem[0x3bf8 + number] == 3
+        panel(number=number)
+    assert m.mem[2] == 0  # Keys 7 and 8 are reachable in the play view.
+
+    panel(lock=True)
+    assert m.mem[0x3c01] == 3 and m.mem[0x212f] == 0
+    m.mem[0x3a9d] = 3  # Scan the dedicated Lock LED on the physical output.
+    m.call(0x38)
+    assert m.mem[0x0664] & 1 == 0
+    set_pot(m, 0, 100)
+    set_pot(m, 0, 115)
+    assert m.mem[v] == m.mem[v + 4] == 115
+    panel(lock=True, number=1, down=True)
+    assert m.mem[0x3c01] == m.mem[0x3bf9] == 3
+    panel(number=1)
+    assert m.mem[0x3c01] == m.mem[0x212f] == 0
+    m.mem[0x3a9d] = 3
+    m.call(0x38)
+    assert m.mem[0x0664] & 1 == 1
+    panel(shift=True, number=6, down=True)
+    assert m.mem[0x3bfe] == 3 and m.mem[v] == m.mem[v + 4] == 100
+    panel(shift=True, number=6)
+    panel(shift=True, lock=True)
+    panel(shift=True)
+    panel()
+    assert m.mem[0x220e] == 2 and m.mem[0x3c02]
+    for number in range(1, 8):
+        panel(number=number, down=True)
+        panel(number=number)
+        assert m.mem[0x3bf8 + number] == 3
+    panel(number=8, down=True)
+    assert m.mem[2] == 1 and m.mem[0x3c00] == 3
+    panel(number=8)
+    panel(number=8, down=True)
+    assert m.mem[2] == 0
+    panel(number=8)
+    panel(shift=True, lock=True)
+    panel(shift=True)
+    panel()
+    assert m.mem[0x220e] == 0 and m.mem[0x3c02] == 0
+
     panel(encoder=True)
     assert m.mem[0x3dd4] == build.HOLD
     m.mem[0x3dd4] = 1
@@ -142,6 +186,12 @@ def run_suite(flash, labels):
     panel_status([0x77, 0x40, 0, 0x77], [3, 0, 0])
     panel(shift=True, number=4, down=True, encoder=True)
     panel_status([0x77, 0x40, 0, 0x7c], [3, 1, 0])
+    panel(shift=True, number=1, down=True, encoder=True)
+    assert m.mem[c['EDITPAT']] == 0  # A new gesture works while Copy is held.
+    panel(shift=True, number=2, down=True, encoder=True)
+    assert m.mem[c['EDITPAT']] == 1
+    panel(shift=True, number=1)
+    panel(shift=True, number=2)
     panel(shift=True, number=4)
     assert m.mem[0x230e] == 0  # Released encoder is seen by the stock loop.
     panel(number=7, down=True)
@@ -159,6 +209,8 @@ def run_suite(flash, labels):
     panel(shift=True)
     panel_status([0x7c, 0x40, 0, 0x7c], [0, 3, 0])
     panel(shift=True, number=1, down=True)
+    panel_status([0x7c, 0x40, 0, 0x77], [3, 3, 0])
+    panel(shift=True, number=1)
     panel_status([0x7c, 0x40, 0, 0x77], [1, 3, 0])
     panel(number=1)
     panel(number=8, down=True)
@@ -169,12 +221,22 @@ def run_suite(flash, labels):
     m.mem[0x3dd4] = 0
     panel()
     panel_status([0x7c, 0x40, 0, 0x77], [0, 0, 3, 0, 0, 0, 0, 0])
+    panel(shift=True, number=5, down=True)
+    panel_status([0x6d, 0x77, 0x3e, 0x79], [1, 3, 0, 0, 3])
+    panel(number=5)
+    finish_save(m)
 
     for external in (False, True):
         m = boot()
         m.mem[v:v + 64] = bytes(64)
         m.mem[v] = 100
         m.mem[v + 16] = 111
+        pitch = 74
+        m.mem[build.RAM['N']] = pitch
+        m.mem[build.RAM['N'] + 16] = pitch
+        a_note = build.tunetable()[pitch]
+        b_note = build.tunetable()[128 + pitch] + 3
+        assert a_note != b_note
         m.mem[0x3df2] = 5      # track 1 does not align with a bar
         m.mem[0x3df3] = 3
         m.mem[0x3e61] = 3      # track 2 runs at a different division
@@ -186,6 +248,14 @@ def run_suite(flash, labels):
         set_pot(m, 0, 100)
         set_pot(m, 0, 70)
         assert m.mem[v] == 70
+
+        # Shift+large pots edit the harmony of B while A keeps its own.
+        m.mem[0x2283] = 1
+        for pot, setting in ((66, 33), (67, 12)):
+            set_pot(m, pot, 0)
+            set_pot(m, pot, setting)
+        m.mem[0x2283] = 0
+        assert (m.mem[scale], m.mem[root]) == (1, 3)
         if external:
             m.mem[0x09a0] = 0xfa
             m.call(labels['rxd0'])
@@ -193,7 +263,7 @@ def run_suite(flash, labels):
         else:
             m.call(labels['seqstart'])
         first = tick(m, 1, external)
-        assert (0, 0x90, 60, 100) in first
+        assert (0, 0x90, a_note, 100) in first
         key(m, 3)
         m.call(labels['rendhook'])
         assert list(m.mem[0x2fe6:0x2fea]) == [0x77, 0x40, 0xfc, 0x7c]
@@ -202,18 +272,20 @@ def run_suite(flash, labels):
         assert all(vel != 70 for _, status, _, vel in before if status == 0x90)
         assert m.mem[c['PLAYPAT']] == 0
         launch = tick(m, 1, external)
-        assert (0, 0x90, 60, 70) in launch, launch
-        assert (0, 0x91, 60, 111) in launch, launch
+        assert (0, 0x90, b_note, 70) in launch, launch
+        assert (0, 0x91, b_note, 111) in launch, launch
         assert any(status == 0x80 for _, status, _, _ in launch)
         assert all(status not in (0xfa, 0xfc) for _, status, _, _ in launch)
         assert m.mem[c['PLAYPAT']] == 1 and m.mem[c['QUEUEPAT']] == 255
         assert m.mem[c['EDITPAT']] == 1
+        key(m, 1)
+        assert (m.mem[scale], m.mem[root]) == (0, 0)
         key(m, 3)  # Return to A without changing the slot being edited.
         key(m, 3)  # Cancel.
         assert m.mem[c['QUEUEPAT']] == 255
         key(m, 3)
         tick(m, until_boundary, external)
-        assert (0, 0x90, 60, 100) in tick(m, 1, external)
+        assert (0, 0x90, a_note, 100) in tick(m, 1, external)
         assert m.mem[c['PLAYPAT']] == 0 and m.mem[c['QUEUEPAT']] == 255
 
     m = boot()
@@ -237,13 +309,16 @@ def run_suite(flash, labels):
 
     m = boot()
     m.mem[v] = 91
+    m.mem[scale], m.mem[root] = 2, 4
     key(m, 5)
     m.mem[0x3dd4] = 100
     m.call(labels['rendhook'])
     assert m.mem[0x2fe6:0x2fea] == bytes((0x6d, 0x77, 0x3e, 0x79))
     finish_save(m)
     key(m, 4)
+    assert (m.mem[scale], m.mem[root]) == (2, 4)  # Copy includes harmony.
     m.mem[v] = 57
+    m.mem[scale], m.mem[root] = 5, 9
     m.mem[3] = 145
     key(m, 5)
     finish_save(m)
@@ -252,12 +327,21 @@ def run_suite(flash, labels):
     assert original[journal_header:journal_header + 32] == bytes([255]) * 32
     m = boot(original)
     assert m.mem[v] == 91 and m.mem[3] == 145
+    assert (m.mem[scale], m.mem[root]) == (2, 4)
     key(m, 2)
-    assert m.mem[v] == 57
+    assert m.mem[v] == 57 and (m.mem[scale], m.mem[root]) == (5, 9)
+    key(m, 1)
+    key(m, 5)  # A is now newer; B must still load its own harmony.
+    finish_save(m)
+    m = boot(bytes(m.ee))
+    assert (m.mem[scale], m.mem[root]) == (2, 4)
+    key(m, 2)
+    assert (m.mem[scale], m.mem[root]) == (5, 9)
 
     # Cut power after each successive page has been launched, including during
     # journal promotion. Before commit keep old B, afterwards recover new B.
     m.mem[v] = 83
+    m.mem[scale], m.mem[root] = 6, 10
     m.call(labels['pattern_save'])
     seen_phases = set()
     for _ in range(220):
@@ -272,6 +356,7 @@ def run_suite(flash, labels):
             if phase >= 18:
                 finish_save(recovered)
             key(recovered, 2)
+            assert (recovered.mem[scale], recovered.mem[root]) == ((6, 10) if expected == 83 else (5, 9))
             assert recovered.mem[v] == expected, (phase, recovered.mem[v], expected)
             assert recovered.ee[:patterns.JOURNAL] == original[:patterns.JOURNAL]
         if not phase:
