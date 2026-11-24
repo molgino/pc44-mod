@@ -30,11 +30,13 @@ Bedingung A:B = Step spielt nur im A-ten von je B Durchläufen der Spur.
 Shift + Taste 1/2: A/B bearbeiten, 3: wechseln, 4: kopieren, 5: speichern, 6: Ctrl All rückgängig.
 Gesichert: alle Steps, Spur-Einstellungen und gemeinsame Einstellungen.
 """
+import argparse
 import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from pc44tool import decode, encode                       # noqa: E402
+import monitor
 import patterns
 from asm import assemble, encode_line, self_test   # noqa: E402
 
@@ -324,6 +326,7 @@ INlx:
     brne INlx
     call eeload
     call pattern_init
+    MONITOR_INIT_HOOK
     ldi r22,1
     clr r24
     clr r25
@@ -424,6 +427,7 @@ Hrun:
     breq Hnext
     call pattern_tick
 Hnext:
+    MONITOR_TICK_HOOK
     rjmp Htick
 Hdisp:
     call pattern_write_tick
@@ -3341,6 +3345,7 @@ tceccaisr:
 rxc0:
     lds r28,0x08a0
     ldi r25,0x01
+    MONITOR_RX_HOOK
     rjmp rxrt
 rxd0:
     lds r28,0x09a0
@@ -3845,7 +3850,7 @@ def per(bpm):
     return 7500000 // (TICKS * bpm) - 1
 
 
-def main(src, dst):
+def main(src, dst, enable_monitor=False):
     self_test()
     hdr, img = decode(open(src, 'rb').read())
     img = bytearray(img)
@@ -3901,7 +3906,15 @@ def main(src, dst):
         NTAB=', '.join(map(str, degtables()[1] + [0] * (len(degtables()[1]) % 2))), DEGTAB=', '.join(map(str, degtables()[0])),
         **RAM)
     consts.update(patterns.CONSTS)
-    code, labels = assemble(patterns.ASM + ASM, BASE, consts)
+    consts.update({
+        'MONITOR_INIT_HOOK': 'call monitor_init' if enable_monitor else '',
+        'MONITOR_TICK_HOOK': 'call monitor_tick' if enable_monitor else '',
+        'MONITOR_RX_HOOK': 'call monitor_rx' if enable_monitor else '',
+    })
+    if enable_monitor:
+        consts.update(monitor.constants(consts))
+    extra_asm = monitor.ASM if enable_monitor else ''
+    code, labels = assemble(extra_asm + patterns.ASM + ASM, BASE, consts)
     print('Neuer Code + Tabellen: %d Bytes ab 0x%04X' % (len(code), BASE))
 
     for adr, orig, line in patches:
@@ -3918,7 +3931,9 @@ def main(src, dst):
 
 
 if __name__ == '__main__':
-    if len(sys.argv) != 3:
-        print(__doc__)
-        sys.exit(1)
-    main(sys.argv[1], sys.argv[2])
+    parser = argparse.ArgumentParser(description='Build the PC44 A/B sequencer firmware.')
+    parser.add_argument('source', help='Original Faderfox V01.01 SysEx image')
+    parser.add_argument('output', help='Destination SysEx image')
+    parser.add_argument('--monitor', action='store_true', help='Enable the PC44 Monitor preview protocol')
+    args = parser.parse_args()
+    main(args.source, args.output, enable_monitor=args.monitor)

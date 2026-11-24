@@ -86,6 +86,29 @@ The firmware of the ATxmega128A4U is not rewritten but patched:
 - **`build.py`** – applies the checked firmware patches and assembles the clock, playback, editing, and display code.
 - **`patterns.py`** – defines the A/B controls, bar scheduling, pattern memory, and save journal.
 
+## PC44 Monitor preview
+
+The optional Monitor firmware sends seq28-compatible playhead, pattern, and step updates
+over USB MIDI for PC44 Monitor 0.3.0. It shows the playing slot in the Monitor's
+single grid while the PC44 can edit either slot. At 120 BPM a full grid refresh takes
+about three seconds, with playhead updates sent separately.
+
+```sh
+python3 build.py --monitor PC44_V0101.syx PC44_seq_ab_monitor_preview.syx
+```
+
+The preview also accepts one experimental USB edit command at a time. A client sends
+`F0 7D 50 34 20 token slot step velocity F7`. All fields are 7-bit bytes. Slot
+`0` or `1` selects A/B, step `0`–`63` counts across the four tracks, and velocity
+`0` switches the step off. The PC44 replies
+`F0 7D 50 34 21 token slot step velocity result F7`, with result `0` applied,
+`1` save in progress, or `2` invalid slot or step. Clients should wait for the
+reply before sending a new edit. Use **Shift + 5** on the PC44 to save edits.
+
+The released MPC Monitor remains a viewer. The edit reply has been tested through
+the emulated USB MIDI handlers. The 155-page image and the MPC return path still
+need a physical test. Build without `--monitor` to produce the 151-page firmware.
+
 ## Tests
 
 The tests run in an AVR emulator (`tests/avrsim.py`, EEPROM/NVM model in `tests/eesim.py`) that executes the real
@@ -95,6 +118,7 @@ firmware image. They also need the original firmware (path can be changed with `
 python3 tests/test_seq.py            # functional test of all features
 python3 tests/test_interrupts.py 1   # inject interrupts at random points
 python3 tests/test_patterns.py       # front panel, MIDI timing, and save recovery
+python3 tests/test_monitor.py        # optional Monitor telemetry and USB edit round trip
 ```
 
 `tests/build_seq20.py` is an older version and is only needed for the test that patterns from the

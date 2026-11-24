@@ -264,7 +264,8 @@ def assemble(src, base, consts):
             continue
         for k, v in consts.items():
             t = re.sub(r'\b%s\b' % k, str(v), t)
-        lines.append(t)
+        if t:
+            lines.append(t)
     labels, pc, items = {}, base, []
     for t in lines:                                   # Pass 1
         if t.endswith(':'):
