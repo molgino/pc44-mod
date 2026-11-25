@@ -1,26 +1,42 @@
-"""PC44 Monitor 0.3.0 telemetry and a USB SysEx velocity edit."""
+"""USB Monitor telemetry and direct parameter edits for the PC44 sequencer."""
 from patterns import PATTERN_REGIONS, SHADOW
+
+# Wire field, indexed by the MPC editor. Each entry names its RAM base and
+# specifies the number of valid indices and the inclusive value range.
+EDIT_FIELDS = (
+    ('V', 64, 0, 127), ('N', 64, 0, 127), ('P', 64, 0, 44),
+    ('L', 64, 0, 15), ('R', 64, 1, 4), ('CT', 64, 0, 7), ('NUDGE', 64, 0, 12),
+    ('TLEN', 4, 1, 16), ('SPD', 4, 0, 6), ('DIR', 4, 0, 3), ('MODE', 4, 0, 2),
+    ('OCT', 4, 0, 6), ('CHN', 4, 0, 15),
+    ('SCALE', 1, 0, 10), ('ROOT', 1, 0, 11),
+    ('SWING', 1, 0, 6), ('BPM_REG', 1, 30, 250), ('MREQ', 4, 0, 1), ('VTRIM', 4, 0, 127),
+)
 
 
 def constants(firmware):
-    # Use the old v25 EEPROM comparison scratch, now clear of save state.
-    names = ('MRX_COUNT', 'MRX_TOKEN', 'MRX_SLOT', 'MRX_STEP', 'MRX_VEL',
-             'MRX_READY', 'MTX_BLOCK', 'MSTATUS')
+    # Old v25 save scratch, between the chord and nudge arrays.
+    names = ('MRX_COUNT', 'MRX_COMMAND', 'MRX_TOKEN', 'MRX_SLOT', 'MRX_INDEX',
+             'MRX_LOW', 'MRX_FIELD', 'MRX_HIGH', 'MRX_READY', 'MTX_BLOCK', 'MSTATUS')
     values = {name: 0x3ED0 + offset for offset, name in enumerate(names)}
 
-    velocity_shadow = SHADOW
+    shadow = {}
+    offset = SHADOW
     for address, size, *_ in PATTERN_REGIONS:
-        if address == firmware['V']:
-            break
-        velocity_shadow += size
-    values['MON_SHADOW_V'] = velocity_shadow
+        shadow[address] = offset
+        offset += size
+    firmware = dict(firmware, BPM_REG=3)
 
-    # Header bytes 0–10 are RAM fields. The first eight are per track.
+    def addresses(field):
+        current = firmware[field]
+        other = shadow.get(current, current)
+        return (current & 255, current >> 8, other & 255, other >> 8)
+
     header = ('TLEN', 'SPD', 'DIR', 'MODE', 'OCT', 'CHN', 'MUTE', 'MREQ', 'SCALE', 'ROOT', 'SWING')
     steps = ('V', 'N', 'P', 'L', 'R', 'CT', 'NUDGE')
     for symbol, fields in (('MON_HEADER_TABLE', header), ('MON_STEP_TABLE', steps)):
-        values[symbol] = ', '.join(str(byte) for field in fields for byte in
-                                   (firmware[field] & 255, firmware[field] >> 8))
+        values[symbol] = ', '.join(str(byte) for field in fields for byte in addresses(field))
+    values['MON_EDIT_FIELDS'] = ', '.join(str(byte) for field, count, low, high in EDIT_FIELDS
+                                        for byte in (*addresses(field), count, low, high, 0))
     return values
 
 
@@ -42,18 +58,25 @@ MIclear:
     ret
 
 ; Runs in the receive ISR. Preserve r28 (the original byte) and r25 (port).
-; Accept exactly F0 7D 50 34 20 token slot step velocity F7.
+; Legacy edit: F0 7D 50 34 20 token slot index low F7.
+; General edit: F0 7D 50 34 22 token slot index low field high F7.
 ; MIDI real-time messages may be interleaved without resetting the parser.
 monitor_rx:
     cpi r28,0xf8
-    brcc MRreturn
+    brcs MRmode
+    ret
+MRmode:
     lds r24,ROUTING
     cpi r24,SEQ
-    brne MRreset
+    breq MRsetup
+    rjmp MRreset
+MRsetup:
     lds r24,0x3bf3
     lds r19,0x211a
     or r24,r19
-    brne MRreset
+    breq MRready
+    rjmp MRreset
+MRready:
     lds r24,MRX_READY
     tst r24
     brne MRreturn
@@ -63,7 +86,13 @@ monitor_rx:
     tst r24
     breq MRreturn
     cpi r24,9
+    brcs MRdata
+    lds r19,MRX_COMMAND
+    cpi r19,0x20
     breq MRend
+    cpi r24,11
+    breq MRend
+MRdata:
     cpi r28,0x80
     brcc MRreset
     cpi r24,5
@@ -75,7 +104,12 @@ monitor_rx:
     cpi r24,3
     breq MRfour
     cpi r28,0x20
-    rjmp MRmatch
+    breq MRcommand
+    cpi r28,0x22
+    brne MRreset
+MRcommand:
+    sts MRX_COMMAND,r28
+    rjmp MRnext
 MRid:
     cpi r28,0x7d
     rjmp MRmatch
@@ -134,13 +168,21 @@ monitor_tick:
     lds r24,MRX_READY
     tst r24
     brne MTedit
+    ; Send changes to the active slot before any legacy blocks. Re-send
+    ; the transport state periodically for clients that joined while stopped.
+    call monitor_status
+    tst r24
+    brne MTdone
     lds r24,0x3de1
-    andi r24,7
-    brne MTstatus
+    andi r24,63
+    cpi r24,1
+    breq MTtrim
+    andi r24,3
+    brne MTdone
     call monitor_block
     rjmp MTdone
-MTstatus:
-    call monitor_status
+MTtrim:
+    call monitor_trims
     rjmp MTdone
 MTedit:
     call monitor_edit
@@ -152,16 +194,53 @@ MTdone:
 MTret:
     ret
 
-; Foreground only: the ISR owns the request bytes until MRX_READY is set.
-; Response code 0 = applied, 1 = saving, 2 = invalid slot or step.
+; Foreground only: the ISR owns the request until MRX_READY is cleared.
+; Result 0 = applied, 1 = save staging, 2 = invalid field/index/value.
 monitor_edit:
     ldi r29,2
-    lds r18,MRX_SLOT
+    lds r28,MRX_SLOT
+    cpi r28,2
+    brcs MEfield
+    rjmp MEreply
+MEinvalid:
+    rjmp MEreply
+MEfield:
+    clr r16
+    lds r17,MRX_LOW
+    lds r18,MRX_COMMAND
+    cpi r18,0x20
+    breq MErange
+    lds r16,MRX_FIELD
+    cpi r16,19
+    brcc MEinvalid
+    lds r18,MRX_HIGH
     cpi r18,2
-    brcc MEreply
-    lds r19,MRX_STEP
-    cpi r19,64
-    brcc MEreply
+    brcc MEinvalid
+    tst r18
+    breq MErange
+    ori r17,0x80
+MErange:
+    ldi r30,lo8(monitor_fields)
+    ldi r31,hi8(monitor_fields)
+    mov r18,r16
+    add r18,r18
+    add r18,r18
+    add r18,r18
+    add r30,r18
+    adc r31,r1
+    adiw r30,4
+    lds r18,MRX_INDEX
+    call lpmz
+    cp r18,r20
+    brcc MEinvalid
+    adiw r30,1
+    call lpmz
+    cp r17,r20
+    brcs MEinvalid
+    adiw r30,1
+    call lpmz
+    cp r20,r17
+    brcs MEinvalid
     ldi r29,1
     lds r24,SAVEPH
     tst r24
@@ -169,28 +248,48 @@ monitor_edit:
     cpi r24,PPROMOTE
     brcs MEreply
 MEwrite:
-    ldi r26,lo8(V)
-    ldi r27,hi8(V)
+    sbiw r30,6
     lds r24,EDITPAT
-    cp r18,r24
+    cp r28,r24
     breq MEpickup
-    ldi r26,lo8(MON_SHADOW_V)
-    ldi r27,hi8(MON_SHADOW_V)
-    rjmp MEcell
+    adiw r30,2
+    rjmp MEstore
 MEpickup:
     ldi r24,1
     sts PATPICKUP,r24
-MEcell:
-    add r26,r19
+MEstore:
+    call monitor_pointer
+    add r26,r18
     adc r27,r1
-    lds r24,MRX_VEL
-    st x,r24
+    cpi r16,16
+    breq MEtempo
+    st x,r17
+    cpi r16,17
+    brne MEok
+    in r24,0x02
+    tst r24
+    brne MEok
+    ldi r26,lo8(MUTE)
+    ldi r27,hi8(MUTE)
+    add r26,r18
+    adc r27,r1
+    st x,r17
+    rjmp MEok
+MEtempo:
+    call monitor_set_tempo
+MEok:
     clr r29
 MEreply:
     call monitor_begin
-    ldi r24,0x21
+    lds r24,MRX_COMMAND
+    inc r24
     call monitor_byte
     ldi r28,0
+    ldi r16,4
+    lds r24,MRX_COMMAND
+    cpi r24,0x20
+    breq MEarg
+    ldi r16,6
 MEarg:
     ldi r26,lo8(MRX_TOKEN)
     ldi r27,hi8(MRX_TOKEN)
@@ -199,7 +298,7 @@ MEarg:
     ld r24,x
     call monitor_byte
     inc r28
-    cpi r28,4
+    cp r28,r16
     brne MEarg
     mov r24,r29
     call monitor_byte
@@ -207,7 +306,51 @@ MEarg:
     sts MRX_READY,r1
     ret
 
-; Send playheads and the legacy playing/queued pattern status when changed.
+; Keep the internal clock setting while leaving an external clock in control.
+monitor_set_tempo:
+    out 0x03,r17
+    mov r18,r17
+    subi r18,BPMMIN
+    ldi r30,lo8(pertab)
+    ldi r31,hi8(pertab)
+    add r30,r18
+    adc r31,r1
+    add r30,r18
+    adc r31,r1
+    call lpmz
+    mov r18,r20
+    adiw r30,1
+    call lpmz
+    in r19,0x3f
+    cli
+    sts INTPER,r18
+    sts INTPER1,r20
+    lds r24,EXT
+    tst r24
+    brne MTEskip
+    sts 0x0a36,r18
+    sts 0x0a37,r20
+MTEskip:
+    out 0x3f,r19
+    ret
+
+monitor_trims:
+    call monitor_begin
+    ldi r24,0x38
+    call monitor_byte
+    clr r16
+MTRnext:
+    ldi r26,lo8(VTRIM)
+    ldi r27,hi8(VTRIM)
+    add r26,r16
+    adc r27,r1
+    ld r24,x
+    call monitor_byte
+    inc r16
+    cpi r16,4
+    brne MTRnext
+    jmp monitor_end
+
 monitor_status:
     clr r16
     clr r28
@@ -226,7 +369,11 @@ MScompare_next:
     inc r16
     cpi r16,5
     brne MScompare
-    tst r28
+    lds r24,0x3de1
+    andi r24,63
+    breq MSsend
+    mov r24,r28
+    tst r24
     brne MSsend
     ret
 MSsend:
@@ -244,7 +391,9 @@ MSvalue:
     inc r16
     cpi r16,5
     brne MSvalue
-    jmp monitor_end
+    call monitor_end
+    ldi r24,1
+    ret
 
 monitor_status_byte:
     cpi r16,4
@@ -301,32 +450,45 @@ MSext:
     ori r24,0x40
     ret
 
-; The old Monitor has one grid shared with its playheads. Stream the playing
-; pattern. If the user is editing the other slot, temporarily use the same
-; exchange routine used by playback.
+; Alternating playing and inactive slot per track. Send headers and
+; velocities for all tracks first. Read either RAM copy without swapping.
+; r29: bit 0 slot, bit 6 inactive, bit 7 read from shadow.
 monitor_block:
-    lds r18,PLAYPAT
-    lds r29,EDITPAT
-    eor r29,r18
-    breq MBbegin
-    clr r24
-    call pattern_buffer
-MBbegin:
     lds r28,MTX_BLOCK
     mov r24,r28
     inc r24
-    andi r24,31
+    andi r24,63
     sts MTX_BLOCK,r24
+    lds r29,PLAYPAT
+    sbrs r28,0
+    rjmp MBsource
+    ldi r18,0x41
+    eor r29,r18
+MBsource:
+    lds r18,EDITPAT
+    mov r24,r29
+    andi r24,1
+    cp r18,r24
+    breq MBbegin
+    ori r29,0x80
+MBbegin:
+    lsr r28
     mov r16,r28
-    lsr r16
-    lsr r16
-    lsr r16
-    andi r28,7
+    andi r16,3
+    lsr r28
+    lsr r28
     call monitor_begin
     mov r24,r28
     ori r24,0x10
+    sbrc r29,6
+    ori r24,0x20
     call monitor_byte
     mov r24,r16
+    sbrs r29,6
+    rjmp MBaddress
+    sbrc r29,0
+    ori r24,4
+MBaddress:
     call monitor_byte
     clr r17
 MBvalues:
@@ -335,13 +497,7 @@ MBvalues:
     inc r17
     cpi r17,16
     brne MBvalues
-    call monitor_end
-    tst r29
-    breq MBret
-    clr r24
-    jmp pattern_buffer
-MBret:
-    ret
+    jmp monitor_end
 
 monitor_block_byte:
     tst r28
@@ -351,9 +507,10 @@ monitor_block_byte:
     mov r18,r28
     dec r18
     add r18,r18
+    add r18,r18
     add r30,r18
     adc r31,r1
-    call monitor_pointer
+    call monitor_block_pointer
     mov r18,r16
     swap r18
     add r18,r17
@@ -365,9 +522,10 @@ MBheader:
     ldi r31,hi8(monitor_header)
     mov r18,r17
     add r18,r18
+    add r18,r18
     add r30,r18
     adc r31,r1
-    call monitor_pointer
+    call monitor_block_pointer
     clr r18
     cpi r17,8
     brcc MBload
@@ -404,9 +562,13 @@ MBlock:
     lds r24,0x3a57
     ret
 MBslot:
-    lds r24,PLAYPAT
+    mov r24,r29
+    andi r24,1
     ret
 
+monitor_block_pointer:
+    sbrc r29,7
+    adiw r30,2
 monitor_pointer:
     call lpmz
     mov r26,r20
@@ -439,4 +601,6 @@ monitor_header:
     .byte MON_HEADER_TABLE
 monitor_steps:
     .byte MON_STEP_TABLE
+monitor_fields:
+    .byte MON_EDIT_FIELDS
 """

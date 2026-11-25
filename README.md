@@ -86,28 +86,40 @@ The firmware of the ATxmega128A4U is not rewritten but patched:
 - **`build.py`** – applies the checked firmware patches and assembles the clock, playback, editing, and display code.
 - **`patterns.py`** – defines the A/B controls, bar scheduling, pattern memory, and save journal.
 
-## PC44 Monitor preview
+## PC44 Monitor and MPC editor
 
-The optional Monitor firmware sends seq28-compatible playhead, pattern, and step updates
-over USB MIDI for PC44 Monitor 0.3.0. It shows the playing slot in the Monitor's
-single grid while the PC44 can edit either slot. At 120 BPM a full grid refresh takes
-about three seconds, with playhead updates sent separately.
+[PC44 Editor](mpc-editor/README.md) is an MPC mixer insert that displays and
+edits both A/B patterns over USB MIDI. The matched firmware continuously
+streams both patterns, including while the sequencer is stopped. It preserves
+the active-pattern telemetry used by the original PC44 Monitor.
 
 ```sh
-python3 build.py --monitor PC44_V0101.syx PC44_seq_ab_monitor_preview.syx
+python3 build.py --monitor PC44_V0101.syx PC44_seq_ab_monitor_edit.syx
 ```
 
-The preview also accepts one experimental USB edit command at a time. A client sends
-`F0 7D 50 34 20 token slot step velocity F7`. All fields are 7-bit bytes. Slot
-`0` or `1` selects A/B, step `0`–`63` counts across the four tracks, and velocity
-`0` switches the step off. The PC44 replies
-`F0 7D 50 34 21 token slot step velocity result F7`, with result `0` applied,
-`1` save in progress, or `2` invalid slot or step. Clients should wait for the
-reply before sending a new edit. Use **Shift + 5** on the PC44 to save edits.
+The USB protocol uses the SysEx prefix `F0 7D 50 34` and ends each packet
+with `F7`. All fields are 7-bit bytes.
 
-The released MPC Monitor remains a viewer. The edit reply has been tested through
-the emulated USB MIDI handlers. The 155-page image and the MPC return path still
-need a physical test. Build without `--monitor` to produce the 151-page firmware.
+| Opcode | Payload | Direction |
+| --- | --- | --- |
+| `01` | `head0 head1 head2 head3 transport` | PC44 → editor |
+| `10`–`17` | `track data[16]` for the playing slot | PC44 → editor |
+| `30`–`37` | `slot*4+track data[16]` for the inactive slot | PC44 → editor |
+| `38` | `trim0 trim1 trim2 trim3` | PC44 → editor |
+| `20` / `21` | `token slot index velocity` plus result in the reply | Legacy velocity edit / reply |
+| `22` / `23` | `token slot index low field high` plus result in the reply | Parameter edit / reply |
+
+Telemetry blocks contain the track header, velocity, pitch, chance, gate,
+ratchet, chord and nudge, in that order. The parameter field IDs and bounds
+are defined by `EDIT_FIELDS` in `monitor.py`. Slot 0/1 selects A/B, and
+index is a flattened step, track number, or zero depending on the field.
+Values use `low + 128 * high`. Result 0 means applied, 1 EEPROM save is
+staging, and 2 invalid. Wait for the reply before sending another edit.
+
+Edits update the working pattern. Select the desired edit slot on the PC44
+and use **Shift + 5** to save. The Monitor build uses 157 application pages
+and retains the Faderfox update flow and existing pattern save layout.
+Build without `--monitor` for the 151-page standalone sequencer.
 
 ## Tests
 

@@ -1,0 +1,23 @@
+{
+  "name": "PC44 Editor",
+  "manufacturer": "NOXED",
+  "version": "0.5.0",
+  "format": "vst2",
+  "kind": "effect",
+  "uid": "NXpE",
+  "numInputs": 2,
+  "numOutputs": 2,
+  "category": "Effect",
+  "shortName": "PC44 Editor",
+  "knobs": [
+    {"parameter": 3, "label": "Value"},
+    {"parameter": 2, "label": "Step"},
+    {"parameter": 1, "label": "Pattern"}
+  ],
+  "file32": "VST/pc44-editor-arm32.so",
+  "file64": "VST/pc44-editor-arm64.so",
+  "description": "Live Faderfox PC44 sequencer grid and USB step editor for MPC standalone.",
+  "author": "NOXED",
+  "url": "https://github.com/molgino/pc44-mod",
+  "license": "MIT"
+}
