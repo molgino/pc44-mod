@@ -26,7 +26,7 @@ using Packet = std::array<uint8_t, 10>;
 constexpr int Slot = 1, Step = 2, Velocity = 3, Apply = 4, Link = 5, Transport = 6;
 constexpr int Tuning = 7, Tempo = 8, Current = 9, Receipt = 10, GridStatus = 13, Details = 14, Timing = 15, Grid = 20;
 constexpr int StepField = 84, SetupField = 85, SetupTrack = 86, SetupValue = 87, SetupApply = 88;
-constexpr int StepStored = 89, SetupStored = 91;
+constexpr int StepStored = 89, SetupStored = 91, Track1 = 16;
 
 VstIntPtr host(AEffect*, VstInt32 opcode, VstInt32, VstIntPtr, void*, float)
 {
@@ -216,13 +216,22 @@ int main(int argc, char** argv)
     expect(plugin, Grid, "A3");
 
     // Track 4 MIDI channel and a 2-byte BPM value share the same write path.
-    plugin->setParameter(plugin, SetupField, 5.0f / 11.0f);
+    // One tagged header from a different hardware track also updates
+    // tuning for the currently selected track.
+    emit({0xf0, 0x7d, 0x50, 0x34, 0x30, 6,
+          16, 4, 0, 0, 3, 2, 0, 0, 1, 7, 0, 1, 2, 0, 1, 1, 0xf7});
+    expect(plugin, Tuning, "G Major");
+    expect(plugin, Grid, "G3");
+    emit({0xf0, 0x7d, 0x50, 0x34, 0x38, 0, 64, 64, 64, 0xf7});
+    expect(plugin, Track1, "VOL 0");
+
+    plugin->setParameter(plugin, SetupField, 5.0f / 10.0f);
     plugin->setParameter(plugin, SetupTrack, 1.0f);
     plugin->setParameter(plugin, SetupValue, 1.0f);
     plugin->setParameter(plugin, SetupApply, 1.0f);
     extendedCommand(1, 3, 12, 15);
     expect(plugin, SetupStored, "16");
-    plugin->setParameter(plugin, SetupField, 9.0f / 11.0f);
+    plugin->setParameter(plugin, SetupField, 9.0f / 10.0f);
     plugin->setParameter(plugin, SetupValue, 189.0f / 220.0f);
     plugin->setParameter(plugin, SetupApply, 0.0f);
     extendedCommand(1, 0, 16, 219);

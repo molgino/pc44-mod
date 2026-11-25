@@ -37,7 +37,7 @@ mpc::PluginInfo editorInfo()
     mpc::PluginInfo info;
     info.name = "PC44 Editor";
     info.vendor = "NOXED";
-    info.version = 500;
+    info.version = 600;
     info.uniqueId = MPC_FOURCC('N', 'X', 'p', 'E');
     info.tailSamples = 1;
     return info;
@@ -88,7 +88,10 @@ public:
             add(mpc::intParam(id.c_str(), name.c_str(), 0, 515, 0));
         }
         add(mpc::choiceParam("step_field", "Step Lane", {FieldNames, FieldNames + StepFields}));
-        add(mpc::choiceParam("setup_field", "Setting", {FieldNames + StepFields, FieldNames + FieldCount}));
+        std::vector<std::string> setupNames;
+        for (int choice = 0; choice < SetupChoices; ++choice)
+            setupNames.emplace_back(FieldNames[setupField(choice)]);
+        add(mpc::choiceParam("setup_field", "Setting", std::move(setupNames)));
         add(mpc::intParam("setup_track", "Setup Track", 0, Tracks - 1, 0));
         add(mpc::intParam("setup_value", "New Setting", 0, 220, 0));
         add(mpc::boolParam("setup_apply", "Apply Setting", false));
@@ -161,13 +164,13 @@ public:
                                 getInt(EditPitchContext));
                 return true;
             case SetupValue:
-                out = fieldText(StepFields + getInt(SetupField), amountValue(StepFields + getInt(SetupField), value / 220.0f));
+                out = fieldText(setupField(getInt(SetupField)), amountValue(setupField(getInt(SetupField)), value / 220.0f));
                 return true;
             case StepStored:
                 out = fieldText(getInt(StepField), n - 1, getInt(EditPitchContext));
                 return true;
             case SetupStored:
-                out = fieldText(StepFields + getInt(SetupField), n - 1);
+                out = fieldText(setupField(getInt(SetupField)), n - 1);
                 return true;
             case Current:
                 out = n ? "Current " + std::to_string(n - 1) : "Current --";
@@ -283,8 +286,8 @@ private:
     Selection selection(bool setup) const
     {
         if (!setup) return {getInt(StepField), getInt(Step)};
-        const int field = StepFields + getInt(SetupField);
-        return {field, field < Scale || field >= Mute ? getInt(SetupTrack) : 0};
+        const int field = setupField(getInt(SetupField));
+        return {field, field < Scale || field == Trim ? getInt(SetupTrack) : 0};
     }
 
     void invalidateControl(bool setup)
@@ -293,6 +296,7 @@ private:
         if (selectionKey_[setup].exchange(key) != key) {
             dirty_[setup].store(false);
             ready_[setup].store(-1);
+            redraw_.store(true);
         }
     }
 
@@ -313,11 +317,20 @@ private:
         return true;
     }
 
+    void releaseConfirmedDraft(const Edit& edit)
+    {
+        const bool setup = edit.field >= StepFields;
+        const auto target = selection(setup);
+        if (getInt(Slot) == edit.slot + 1 && target.field == edit.field &&
+            target.index == edit.index &&
+            amountValue(target.field, getNormalised(setup ? SetupValue : Velocity)) == edit.value)
+            dirty_[setup].store(false);
+    }
+
     static std::string trackText(int value)
     {
         if (!value) return "--";
-        if (value & 64) return "MUTE >";
-        if (value & 32) return "MUTED";
+        if (value & 32) return "VOL 0";
         const int length = value & 31;
         return length ? std::to_string(length) + " steps" : "--";
     }
@@ -367,17 +380,17 @@ private:
         if (refreshControl(false, selectedSlot, stepTarget, stepStored)) changed = true;
         if (refreshControl(true, selectedSlot, setupTarget, setupStored)) changed = true;
         for (int field = StepFields; field < FieldCount; ++field) {
-            const int track = field < Scale || field >= Mute ? getInt(SetupTrack) : 0;
+            const int track = field < Scale || field == Trim ? getInt(SetupTrack) : 0;
             update(SetupValues + field - StepFields, monitor.value(slot, field, track) + 1);
         }
 
-        const auto* active = monitor.active >= 0 ? &monitor.patterns[monitor.active][0] : nullptr;
-        if (active && !active->has(0)) active = nullptr;
-        auto header = [&](int field) { return active ? active->data[0][field] : 0; };
-        update(Tempo, (header(11) << 7) + header(12));
-        const auto* tuning = pattern && (*pattern)[0].has(0) ? &(*pattern)[0].data[0] : nullptr;
-        update(Tuning, tuning && (*tuning)[9] < 12 ? 1 + ((*tuning)[8] << 4) + (*tuning)[9] : 0);
-        update(Focus, active ? 1 + (header(13) & 3) + (header(14) ? 4 : 0) : 0);
+        const auto& active = monitor.patterns[monitor.active >= 0 ? monitor.active : 0][0];
+        update(Tempo, std::max(0, monitor.value(slot, BPM, 0)));
+        const int scale = monitor.value(slot, Scale, 0);
+        const int root = monitor.value(slot, Root, 0);
+        update(Tuning, scale >= 0 && scale < 11 && root >= 0 && root < 12 ? 1 + (scale << 4) + root : 0);
+        const int focus = active.get(0, 13);
+        update(Focus, focus >= 0 ? 1 + (focus & 3) + (active.get(0, 14) > 0 ? 4 : 0) : 0);
         const int offset = cell % Steps;
         update(Details, selected && selected->has(0) && selected->has(2) && selected->has(3)
                             ? 1 + midiNote(selected->data[2][offset], pitchContext(*selected)) +
@@ -392,11 +405,11 @@ private:
             const auto* header = track && track->has(0) ? &track->data[0] : nullptr;
             const int length = header ? std::min<int>(Steps, (*header)[0]) : 0;
             const int head = liveGrid && monitor.hasHeads ? monitor.heads[row] : 0;
-            const bool muted = liveGrid && monitor.hasHeads ? (head & 0x10) != 0 :
+            const int trim = monitor.trims[row];
+            const bool muted = trim >= 0 ? trim == 0 :
+                               liveGrid && monitor.hasHeads ? (head & 0x10) != 0 :
                                header && (*header)[6] != 0;
-            const bool queuedMute = liveGrid && monitor.hasHeads ? (head & 0x20) != 0 :
-                                    liveGrid && header && (*header)[7] != (*header)[6];
-            update(Track1 + row, length + (muted ? 32 : 0) + (queuedMute ? 64 : 0));
+            update(Track1 + row, length + (muted ? 32 : 0));
             const int context = track ? pitchContext(*track) : 0;
             for (int step = 0; step < Steps; ++step) {
                 const int field = stepTarget.field;
@@ -453,6 +466,7 @@ private:
                 if (result == Result::Telemetry) {
                     lastFrame = now;
                 } else if (result != Result::Ignored) {
+                    if (result == Result::Applied && pending) releaseConfirmedDraft(*pending);
                     receipt = result == Result::Applied ? Applied :
                               result == Result::Saving ? SaveBusy : Rejected;
                     pending.reset();
@@ -514,9 +528,10 @@ private:
             }
             writable_.store(link == Live && !pending);
 
-            if (now >= nextUI) {
+            const bool selectionChanged = redraw_.exchange(false);
+            if (selectionChanged || now >= nextUI || getInt(Receipt) != receipt) {
                 publish(monitor, link, receipt);
-                nextUI = now + 62ms;
+                nextUI = now + 33ms;
             }
             std::this_thread::sleep_for(10ms);
         }
@@ -525,6 +540,7 @@ private:
     }
 
     std::atomic<bool> stop_{false};
+    std::atomic<bool> redraw_{false};
     std::atomic<bool> writable_{false};
     std::atomic<bool> applyState_[2]{};
     std::atomic<bool> dirty_[2]{};

@@ -16,10 +16,16 @@ constexpr std::array<uint8_t, 4> Prefix{0xf0, 0x7d, 0x50, 0x34};
 enum Field {
     StepVelocity, Pitch, Chance, Gate, Ratchet, Chord, Nudge,
     TrackLength, Speed, Direction, Mode, Octave, Channel, Scale, Root,
-    Shuffle, BPM, Mute, Trim, FieldCount
+    Shuffle, BPM, LegacyMute, Trim, FieldCount
 };
 constexpr int StepFields = TrackLength;
 constexpr int SetupFields = FieldCount - StepFields;
+constexpr int SetupChoices = SetupFields - 1;
+constexpr int setupField(int choice)
+{
+    const int field = StepFields + choice;
+    return field < LegacyMute ? field : Trim;
+}
 
 struct Range { int min; int max; };
 constexpr std::array<Range, FieldCount> Ranges{{
@@ -101,7 +107,7 @@ struct Monitor {
         if (field == Trim) return trims[index];
         if (field >= Shuffle) slot = active; // shared globals
         if (slot < 0) return -1;
-        if (field == Mute) return patterns[slot][index].get(0, 7);
+        if (field == LegacyMute) return -1;
         if (field == BPM) {
             const auto& header = patterns[slot][0];
             const int hi = header.get(0, 11);
@@ -133,7 +139,7 @@ struct Monitor {
                 setActive(frame[21]);
             }
             if (active < 0) return Result::Ignored;
-            patterns[active][frame[5]].update(block, frame + 6);
+            updateBlock(active, frame[5], block, frame + 6);
             return Result::Telemetry;
         }
         if (command >= 0x30 && command <= 0x37 && size == 23 && frame[5] < 8) {
@@ -141,7 +147,7 @@ struct Monitor {
             const int block = command - 0x30;
             if (block == 0 && frame[21] != slot) return Result::Ignored;
             extended = true;
-            patterns[slot][frame[5] % Tracks].update(block, frame + 6);
+            updateBlock(slot, frame[5] % Tracks, block, frame + 6);
             return Result::Telemetry;
         }
         if (command == 0x38 && size == 10) {
@@ -172,6 +178,20 @@ private:
         hasHeads = false;
     }
 
+    void updateBlock(int slot, int track, int block, const uint8_t* data)
+    {
+        patterns[slot][track].update(block, data);
+        if (block != 0) return;
+        for (auto& row : patterns[slot]) {
+            row.set(0, 8, data[8]);  // scale and root belong to the entire slot
+            row.set(0, 9, data[9]);
+        }
+        for (auto& pattern : patterns)
+            for (auto& row : pattern)
+                for (int field = 10; field <= 14; ++field)
+                    row.set(0, field, data[field]);  // shared settings and panel state
+    }
+
     void confirm(const Edit& edit)
     {
         const int field = edit.field;
@@ -185,21 +205,15 @@ private:
             for (auto& track : patterns[edit.slot]) track.set(0, 8 + field - Scale, value);
         } else if (field == Trim) {
             trims[index] = value;
-        } else {
-            for (auto& tracks : patterns) {
-                if (field == Mute) {
-                    tracks[index].set(0, 7, value);
-                    if (!running()) tracks[index].set(0, 6, value);
-                } else {
-                    for (auto& track : tracks) {
-                        if (field == Shuffle) track.set(0, 10, value);
-                        if (field == BPM) {
-                            track.set(0, 11, value >> 7);
-                            track.set(0, 12, value & 127);
-                        }
+        } else if (field == Shuffle || field == BPM) {
+            for (auto& tracks : patterns)
+                for (auto& track : tracks) {
+                    if (field == Shuffle) track.set(0, 10, value);
+                    else {
+                        track.set(0, 11, value >> 7);
+                        track.set(0, 12, value & 127);
                     }
                 }
-            }
         }
     }
 };

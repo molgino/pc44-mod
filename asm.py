@@ -208,9 +208,10 @@ def encode_line(op, args, pc, labels):
         return w(0xB800 | (A & 0x30) << 5 | reg(a[1]) << 4 | (A & 0x0F))
     if op == 'sts':
         return w(0x9200 | reg(a[1]) << 4, num(a[0], labels))
-    if op == 'lpm':
+    if op in ('lpm', 'elpm'):
+        base = {'lpm': 0x9004, 'elpm': 0x9006}[op]
         assert a[1].lower() in ('z', 'z+')
-        return w((0x9005 if a[1].lower() == 'z+' else 0x9004) | reg(a[0]) << 4)
+        return w((base + (a[1].lower() == 'z+')) | reg(a[0]) << 4)
     if op == 'ret': return w(0x9508)
     if op in ('sec', 'clc'): return w(0x9408 if op == 'sec' else 0x9488)
     if op in ('adiw', 'sbiw'):
@@ -294,6 +295,7 @@ def self_test():
         ('push', 'r1', '1f 92'), ('pop', 'r0', '0f 90'), ('in', 'r0,0x3f', '0f b6'),
         ('out', '0x3b,r0', '0b be'), ('clr', 'r1', '11 24'), ('ldi', 'r30,0xa2', 'e2 ea'),
         ('andi', 'r24,0xf0', '80 7f'), ('mov', 'r28,r24', 'c8 2f'), ('lpm', 'r30,z', 'e4 91'),
+        ('elpm', 'r24,z', '86 91'), ('elpm', 'r24,z+', '87 91'),
         ('sts', '0x08a3,r1', '10 92 a3 08'), ('call', '0x99a', '0e 94 cd 04'),
         ('jmp', '0x6c68', '0c 94 34 36'), ('reti', '', '18 95'), ('tst', 'r24', '88 23'),
         ('inc', 'r24', '83 95'), ('add', 'r30,r18', 'e2 0f'), ('adc', 'r31,r1', 'f1 1d'),

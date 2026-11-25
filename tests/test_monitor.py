@@ -29,6 +29,7 @@ def run(flash, labels):
     machine.stubs.update({
         0x407e: lambda _: None,
         0x3ac0: lambda _: None,
+        0x1466: lambda _: None,
     })
     notes = []
     machine.stubs[0xa9a] = lambda cpu: notes.append(tuple(cpu.r[i] for i in (24, 22, 20)))
@@ -176,12 +177,12 @@ def run(flash, labels):
 
     edit(parameter(60, 0, 0, 15, 5))
     edit(parameter(61, 0, 0, 16, 219))
-    edit(parameter(62, 0, 3, 17, 1))
+    edit(parameter(62, 0, 3, 17, 1), status=2)  # Deprecated mute opcode.
     edit(parameter(63, 0, 3, 18, 95))
     assert machine.mem[0x3ded] == 5
     assert machine.mem[3] == 219
     assert int.from_bytes(machine.mem[0x3e0a:0x3e0c], 'little') == build.per(219)
-    assert machine.mem[0x3e87] == 1
+    assert machine.mem[0x3e87] == 0
     assert machine.mem[CONSTS['VTRIM'] + 3] == 95
     packets = advance(512)
     blocks = {tuple(packet[:2]): packet[2:] for packet in packets if len(packet) == 18}
@@ -196,10 +197,44 @@ def run(flash, labels):
     for field, index, value in ((19, 0, 1), (7, 4, 16), (7, 3, 0), (4, 1, 0),
                                 (16, 0, 29), (16, 0, 251), (13, 1, 0), (0, 0, 270)):
         edit(parameter(72, 1, index, field, value), status=2)
-    # Apply the slew-free mute immediately while stopped, even for an
-    # explicitly selected A when B is the current hardware edit slot.
-    edit(parameter(73, 0, 2, 17, 1))
-    assert machine.mem[0x3e82] == machine.mem[0x3e86] == 1
+    # Send physical changes immediately from the stock movement entry,
+    # independently of where the refresh sweep is. The edit slot is B.
+    def pot(index, raw, shift=False):
+        machine.mem[0x2283] = int(shift)
+        machine.mem[0x3a56] = index
+        machine.mem[0x3df6] = raw
+        machine.r[10] = machine.r[24] = 0
+        machine.call(0x11e8)
+        machine.mem[0x2283] = 0
+
+    machine.mem[0x3ed9] = 63  # sweep is at its last (nudge) block
+    pot(0, 88)
+    assert any(p[:3] == bytes((0x31, 4, 88)) for p in advance(3))
+    pot(64, 55, shift=True)
+    assert any(p[:2] == bytes((0x30, 4)) and p[11] == 5 for p in advance(3))
+    pot(65, 117, shift=True)
+    assert any(p[:2] == bytes((0x30, 4)) and p[10] == 10 for p in advance(3))
+
+    # Volume zero is applied immediately over both the panel and USB paths
+    # and the telemetry reports the physical change without waiting a sweep.
+    machine.call(labels['seqstart'])
+    advance(1)
+    notes.clear()
+    pot(64, 0)
+    assert any(status == 0x80 for status, _, _ in notes)
+    packets = advance(3)
+    assert any(p[0] == 0x01 and (p[1] & 0x10) for p in packets)
+    assert any(p[:2] == bytes((0x38, 0)) for p in packets)
+    assert not any(status == 0x90 for status, _, _ in notes)
+    edit(parameter(73, 1, 0, 18, 64))
+    machine.call(labels['stopseq'])
+    machine.call(labels['seqstart'])
+    advance(1)
+    assert any(status == 0x90 for status, _, _ in notes)
+    edit(parameter(74, 1, 0, 18, 0))
+    assert machine.mem[CONSTS['VTRIM']] == 0
+    edit(parameter(75, 1, 0, 18, 64))
+    machine.call(labels['stopseq'])
 
     # Real-time bytes may arrive between any SysEx bytes. Leave stock timing
     # running; the deferred edit is applied through the foreground hook.

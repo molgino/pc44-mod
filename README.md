@@ -19,11 +19,11 @@ This build runs in **`SEq`** mode. The setup routing control stays fixed to the 
 | Per step | velocity, pitch (scale-based), note length (1/12 … 16 steps), probability 10–100 % and conditions 1:2 … 8:8, ratchet 1–4, chord type, nudge (microtiming ±½ step) |
 | Per track (edit page) | pattern length 1–16, octave, speed ×1/8 … ×2, MIDI channel, direction (forward, backward, ping-pong, random), mode note / chord / pad |
 | Per pattern | root note and 11 scales |
-| Global | tempo 30–250 BPM and shuffle |
-| Live | bar-quantized A/B switching, track mute, four velocity trims, clear track, and reversible **Ctrl All** |
+| Global | tempo 30–250 BPM and swing |
+| Live | bar-quantized A/B switching, four track volumes with silence at zero, clear track, and reversible **Ctrl All** |
 | Clock | internal clock with MIDI clock output, or automatically synced to external MIDI clock (USB/DIN), start/continue/stop |
 | Memory | two explicitly saved EEPROM slots with interrupted-save recovery |
-| Snap/Jump | firmware pot mode applies until you change the edit slot, then pickup applies to step, tuning, and shuffle edits for the session |
+| Snap/Jump | your selected hardware pot mode applies across A/B switching and USB edits |
 
 ## A/B performance workflow
 
@@ -34,16 +34,18 @@ Hold **Shift** and press a numbered key in the sequencer play screen.
 | 1 / 2 | Edit A / B. You can edit either slot while the other plays. |
 | 3 | Switch playback between A and B. While playing, the switch occurs at the next 4/4 bar boundary and all four tracks restart together. Press again before the boundary to cancel. While stopped, the switch is immediate. |
 | 4 | Copy the playing slot to the other slot and select the copy for editing. |
-| 5 | Save the slot you are editing, along with the shared tempo, shuffle, and mute settings. Wait for `SAVE` to clear before switching the unit off. |
+| 5 | Save the slot you are editing, along with the shared tempo and swing settings. Wait for `SAVE` to clear before switching the unit off. |
 | 6 | Revert the most recent **Ctrl All** gesture with its original slot selected for editing. |
 
-Start a groove in A with key **7**. Use **Shift + 4** to copy it to B, then turn the step pots to make a variation. Use **Shift + 3** to launch B. To return to A, press **Shift + 3** again. Key **8** stops playback. Holding Shift while turning a step pot still controls track mute.
+Double-press the encoder in the play view to switch playback between A and B with one hand. Make both presses within about 400 ms. While playing, the switch waits for the next bar. Double-press again before the boundary to cancel. While stopped, it switches immediately. A single press shows the tempo.
 
-The four large pots trim the playback velocity of tracks 1–4, with unity gain at the center. Trim leaves stored step velocities intact. Hold **Shift** and turn large pot 1 for shared shuffle, pot 3 for the edit slot's root, and pot 4 for its scale. Root and scale follow the pattern being edited. Editing the inactive slot leaves the playing slot’s tuning intact. Copying a pattern also copies its tuning.
+Start a groove in A with key **7**. Use **Shift + 4** to copy it to B, then turn the step pots to make a variation. Double-press the encoder to launch B. Key **8** stops playback.
+
+The four large pots (65–68) control the playback velocity of tracks 1–4. The center is unity gain. At zero, the track releases held notes and suppresses new ones. Stored step velocities stay intact. Hold **Shift** and turn **pot 65** for the edit slot's root note or **pot 66** for its scale. To change shared swing, open Track Edit (**Shift + Lock**), press the encoder, then turn it. Buttons 1–7 still choose the track settings and button 8 controls playback.
 
 The idle display shows the playing slot in the first digit and the edit slot in the fourth. The third digit shows a queued slot with its decimal point lit. For example, `A- b` means A plays and B is being edited. `A-b.b` means B is queued and is also the edit slot.
 
-Hold **Shift** to see the pattern status on the numbered LEDs. LEDs **1** and **2** represent A and B. The playing slot is bright and the edit slot is dim if it differs. LED **3** lights while a switch is queued. When stopped, the LEDs show the active steps in the last row you touched. A numbered key lights at full brightness while held, including when another key is already down. Hold **Lock** and turn a step pot for **Ctrl All**. The dedicated Lock LED lights while you hold it in the play view. **Shift + Lock** opens and closes the track edit page.
+Hold **Shift** to see the pattern status on the numbered LEDs. LEDs **1** and **2** represent A and B. The playing slot is bright and the edit slot is dim if it differs. LED **3** lights while a switch is queued. When stopped, the LEDs show the active steps in the last row you touched. A numbered key lights at full brightness while held, including when another key is already down. Hold **Lock** and turn a step pot, or tap **Lock** to latch **Ctrl All** and free your hand. The Lock LED follows Ctrl All. Tap **Lock** again to turn off the latch. **Shift + Lock** opens and closes the track edit page.
 
 At boot, A is selected. A saved pattern from earlier releases is imported as A. Until B has a saved version, it starts as a copy of A. Use **Shift + 5** in each slot to keep both versions across a reboot. Existing A/B saves keep the root and scale stored when each slot was last saved.
 
@@ -91,10 +93,11 @@ The firmware of the ATxmega128A4U is not rewritten but patched:
 [PC44 Editor](mpc-editor/README.md) is an MPC mixer insert that displays and
 edits both A/B patterns over USB MIDI. The matched firmware continuously
 streams both patterns, including while the sequencer is stopped. It preserves
-the active-pattern telemetry used by the original PC44 Monitor.
+the active-pattern telemetry used by the original PC44 Monitor. Changed
+panel values and track volume take priority over the background sweep.
 
 ```sh
-python3 build.py --monitor PC44_V0101.syx PC44_seq_ab_monitor_edit.syx
+python3 build.py --monitor PC44_V0101.syx PC44_seq_ab_one_hand.syx
 ```
 
 The USB protocol uses the SysEx prefix `F0 7D 50 34` and ends each packet
@@ -104,22 +107,30 @@ with `F7`. All fields are 7-bit bytes.
 | --- | --- | --- |
 | `01` | `head0 head1 head2 head3 transport` | PC44 → editor |
 | `10`–`17` | `track data[16]` for the playing slot | PC44 → editor |
-| `30`–`37` | `slot*4+track data[16]` for the inactive slot | PC44 → editor |
+| `30`–`37` | `slot*4+track data[16]` for the inactive slot or a changed block in either slot | PC44 → editor |
 | `38` | `trim0 trim1 trim2 trim3` | PC44 → editor |
 | `20` / `21` | `token slot index velocity` plus result in the reply | Legacy velocity edit / reply |
 | `22` / `23` | `token slot index low field high` plus result in the reply | Parameter edit / reply |
 
 Telemetry blocks contain the track header, velocity, pitch, chance, gate,
 ratchet, chord and nudge, in that order. The parameter field IDs and bounds
-are defined by `EDIT_FIELDS` in `monitor.py`. Slot 0/1 selects A/B, and
-index is a flattened step, track number, or zero depending on the field.
+are defined by `EDIT_FIELDS` in `monitor.py`. Field 17 is reserved for the
+removed mute switch. Use field 18 (volume) with value zero to silence a track.
+Slot 0/1 selects A/B. Index is a flattened step, track number, or zero
+depending on the field.
 Values use `low + 128 * high`. Result 0 means applied, 1 EEPROM save is
 staging, and 2 invalid. Wait for the reply before sending another edit.
 
 Edits update the working pattern. Select the desired edit slot on the PC44
-and use **Shift + 5** to save. The Monitor build uses 157 application pages
+and use **Shift + 5** to save. The Monitor build uses 158 application pages
 and retains the Faderfox update flow and existing pattern save layout.
 Build without `--monitor` for the 151-page standalone sequencer.
+
+## PC44 flash size test
+
+The temporary flash probe displays a pass count or the first mismatching
+256-byte chunk on the PC44. Follow the separate instructions to test the
+stock updater and return to your sequencer firmware. [Flash probe instructions](docs/flash-probe.md)
 
 ## Tests
 
@@ -131,6 +142,7 @@ python3 tests/test_seq.py            # functional test of all features
 python3 tests/test_interrupts.py 1   # inject interrupts at random points
 python3 tests/test_patterns.py       # front panel, MIDI timing, and save recovery
 python3 tests/test_monitor.py        # optional Monitor telemetry and USB edit round trip
+python3 tests/test_flash_probe.py    # verifier and display for the flash probe
 ```
 
 `tests/build_seq20.py` is an older version and is only needed for the test that patterns from the
@@ -142,7 +154,7 @@ older storage format are carried over.
 - ATxmega128A4U, 32 MHz. Only GPIOR0..3 store values; GPIOR4..15 always read 0 on this chip.
 - The firmware uses EEPROM from `0x010` to `0x11F`. The save journal starts at `0x200`, A at `0x400`, and B at `0x600`. The old save layout remains readable until A is first saved in the new format.
 - The pot scanner averages eight ADC samples per pot, freeing SRAM for the inactive pattern. The patches retain the original pot scaling and the encoder switch sampling address.
-- This build fits in 151 firmware pages, the same size as the previous hardware-tested build. The emulator checks the patched image and ADC sampling code. Installation and pot response for this build still need physical PC44 verification.
+- The standalone build uses 151 update pages. The Monitor build uses 158, or 39.5 KiB of the chip's 128 KiB application flash. The assembler currently uses 16-bit byte addresses for table reads. The space below 64 KiB gives about 24.5 KiB of address range beyond this build. [ATxmega128A4U datasheet](https://ww1.microchip.com/downloads/en/DeviceDoc/Atmel-8387-8-and16-bit-AVR-Microcontroller-XMEGA-A4U_Datasheet.pdf)
 
 ## Contributing
 

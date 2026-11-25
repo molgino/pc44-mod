@@ -30,7 +30,7 @@ PATTERN_REGIONS = [
 GLOBALS = [
     (0x3DED, 1, 0, 6, 0),     # shuffle
     (0x0003, 1, 30, 250, 120),  # internal tempo
-    (0x3E84, 4, 0, 1, 0),     # requested mute
+    (0x3E84, 4, 0, 0, 0),     # reserved legacy mute bytes
 ]
 PATTERN_SIZE = sum(region[1] for region in PATTERN_REGIONS)
 PAYLOAD_SIZE = PATTERN_SIZE + sum(region[1] for region in GLOBALS)
@@ -39,7 +39,7 @@ SLOTS = (0x400, 0x600)
 PAYLOAD_PAGES = PAYLOAD_SIZE // 32
 HEADER_OFFSET = PAYLOAD_SIZE
 assert PAYLOAD_SIZE == 480
-assert SHADOW + PATTERN_SIZE + 68 <= ADC_END
+assert SHADOW + PATTERN_SIZE + 69 <= ADC_END
 
 CONSTS = dict(
     PSHADOW=SHADOW, PSIZE=PATTERN_SIZE, PSAVED=PAYLOAD_SIZE,
@@ -54,7 +54,7 @@ CONSTS = dict(
     PLAYPAT=SHADOW + PATTERN_SIZE, EDITPAT=SHADOW + PATTERN_SIZE + 1,
     QUEUEPAT=SHADOW + PATTERN_SIZE + 2, BARPOS=SHADOW + PATTERN_SIZE + 3,
     SAVEPH=SHADOW + PATTERN_SIZE + 4, SAVESLOT=SHADOW + PATTERN_SIZE + 5,
-    PATKEY=SHADOW + PATTERN_SIZE + 6, PATPICKUP=SHADOW + PATTERN_SIZE + 7,
+    PATKEY=SHADOW + PATTERN_SIZE + 6, CTRLSTATE=SHADOW + PATTERN_SIZE + 7,
     SAVEGEN=SHADOW + PATTERN_SIZE + 8,
     SAVEGENHI=SHADOW + PATTERN_SIZE + 9,
     PAGEBUF=SHADOW + PATTERN_SIZE + 10,
@@ -64,6 +64,8 @@ CONSTS = dict(
     UNDOEDIT=SHADOW + PATTERN_SIZE + 48, UNDOHELD=SHADOW + PATTERN_SIZE + 49,
     UNDOBUF=SHADOW + PATTERN_SIZE + 50,
     TEMPO_KEY=SHADOW + PATTERN_SIZE + 66, LASTROW=SHADOW + PATTERN_SIZE + 67,
+    ENC_WINDOW=SHADOW + PATTERN_SIZE + 68,
+    ENC_DOUBLE_TICKS=160, ENC_DEBOUNCE_LIMIT=147,
     PREGTAB=', '.join(
         str(value) for addr, size, low, high, default in PATTERN_REGIONS + GLOBALS
         for value in (addr & 255, addr >> 8, size, low, high, default)
@@ -72,6 +74,7 @@ CONSTS = dict(
 
 PATCHES = [
     (0x687A, '0e 94 87 1f', 'call pattern_boot'),
+    (0x05D6, '80 93 9d 3a', 'call pattern_panel_clock'),
     (0x07D4, 'e2 95 f2 95', 'jmp adc_sample_12'),
     (0x083A, 'e2 95 f2 95', 'jmp adc_sample_11'),
     (0x08B2, 'e2 95 f2 95', 'jmp adc_sample_4_10'),
@@ -170,14 +173,36 @@ PBcopy:
     pop r28
     ret
 
+; The original panel ISR advances its scan byte every 5,001 CPU
+; cycles. Count down at every 16th scan (about 2.5 ms). Preserve the
+; original STS result and flags. Only touch the timer on those scans.
+pattern_panel_clock:
+    sts 0x3a9d,r24
+    sbrc r24,0
+    ret
+    sbrc r24,1
+    ret
+    sbrc r24,2
+    ret
+    sbrc r24,3
+    ret
+    push r0
+    in r0,0x3f
+    push r24
+    lds r24,ENC_WINDOW
+    tst r24
+    breq PPCrestore
+    dec r24
+    sts ENC_WINDOW,r24
+PPCrestore:
+    pop r24
+    out 0x3f,r0
+    pop r0
+    ret
+
 ; Shift + 1/2 edit A/B, 3 switches playback, 4 copies, 5 saves, 6 reverts.
 ; Track held keys independently so a new press works while another is held.
 pattern_keys:
-    lds r18,0x3a57
-    tst r18
-    brne PKshift
-    sts UNDOHELD,r1
-PKshift:
     lds r18,0x2283
     tst r18
     breq PKrelease
@@ -216,7 +241,7 @@ PKrelease:
     ret
 PKpressed:
     cpi r24,3
-    breq PKqueue
+    breq pattern_request_switch
     lds r18,SAVEPH
     tst r18
     breq PKaction
@@ -237,7 +262,7 @@ PKsave:
 PKselect:
     dec r24
     rjmp pattern_select
-PKqueue:
+pattern_request_switch:
     sts 0x3dd4,r1
     lds r24,QUEUEPAT
     cpi r24,0xff
@@ -263,7 +288,9 @@ PKcopy:
     lds r24,PLAYPAT
     ldi r18,1
     eor r24,r18
-    rjmp pattern_select
+    call pattern_select
+    MONITOR_PATTERN_HOOK
+    ret
 PKret:
     ret
 
@@ -272,8 +299,6 @@ pattern_select:
     cp r24,r18
     breq PSelret
     sts EDITPAT,r24
-    ldi r24,1
-    sts PATPICKUP,r24
     sts 0x3dd4,r1
     clr r24
     jmp pattern_buffer
@@ -377,7 +402,7 @@ pattern_init:
     sts EDITPAT,r1
     sts BARPOS,r1
     sts PATKEY,r1
-    sts PATPICKUP,r1
+    sts CTRLSTATE,r1
     sts SAVEPH,r1
     sts SAVEGEN,r1
     sts SAVEGENHI,r1
@@ -385,6 +410,7 @@ pattern_init:
     sts UNDOHELD,r1
     sts TEMPO_KEY,r1
     sts LASTROW,r1
+    sts ENC_WINDOW,r1
     ldi r24,64
     sts VTRIM,r24
     sts VTRIM1,r24
@@ -822,8 +848,78 @@ PRVcopy:
     sts UNDOPTRHI,r1
     sts UNDOHELD,r1
     sts 0x3dd4,r1
+    MONITOR_UNDO_HOOK
 PRVdone:
     ret
+
+; Ctrl All supports both momentary use and tapping to latch. Ignore
+; Shift+Lock and button gestures made outside the normal sequencer view.
+; CTRLSTATE bits: 0 latched, 1 pressed, 2 used while held.
+ctrl_update:
+    lds r18,CTRLSTATE
+    lds r19,0x3a57
+    tst r19
+    breq CULrelease
+    tst r25
+    breq CULused
+    lds r19,0x3c29
+    lds r20,0x2283
+    or r19,r20
+    brne CULused
+    ori r18,2
+    rjmp CULstore
+CULused:
+    ori r18,6
+    rjmp CULstore
+CULrelease:
+    sbrs r18,1
+    rjmp CULidle
+    sbrc r18,2
+    rjmp CULidle
+    tst r25
+    breq CULidle
+    ldi r19,1
+    eor r18,r19
+CULidle:
+    andi r18,1
+    tst r18
+    brne CULstore
+    sts UNDOHELD,r1
+CULstore:
+    lds r19,CTRLSTATE
+    cp r18,r19
+    breq CULret
+    sts CTRLSTATE,r18
+    MONITOR_HEADER_HOOK
+    ret
+
+ctrl_active:
+    lds r24,0x3a57
+    tst r24
+    brne CULret
+    lds r24,CTRLSTATE
+    andi r24,1
+CULret:
+    ret
+
+; r24 = track, r18 = trim. At zero release every sounding note, including
+; chord voices. The tick path retries releases if the MIDI ring was full.
+trim_store:
+    ldi r26,lo8(VTRIM)
+    ldi r27,hi8(VTRIM)
+    add r26,r24
+    adc r27,r1
+    st x,r18
+    tst r18
+    breq trim_silence
+    ret
+trim_silence:
+    ldi r26,lo8(OFF)
+    ldi r27,hi8(OFF)
+    add r26,r24
+    adc r27,r1
+    st x,r1
+    jmp noteoff
 
 ; Apply the track's temporary gain to a note-on velocity in r18.
 ; Center is unity, and active notes stay in the MIDI range 1..127.

@@ -62,11 +62,13 @@ def run_suite(flash, labels):
             timeline.extend((t, *msg) for msg in events)
         return timeline
 
-    def set_pot(m, index, value):
+    def set_pot(m, index, value, snap=0, stock_fallback=False):
         m.mem[0x3a56] = index
         m.mem[0x3df6] = value
-        m.r[10] = m.r[24] = 0
-        m.call(labels['seqpoti'])
+        m.r[10] = 0
+        m.r[24] = index if stock_fallback else snap
+        m.mem[0x2b1a] = snap
+        m.call(0x1336 if stock_fallback else 0x11e8)
 
     def finish_save(m):
         for _ in range(220):
@@ -159,6 +161,19 @@ def run_suite(flash, labels):
     panel(shift=True, number=6, down=True)
     assert m.mem[0x3bfe] == 3 and m.mem[v] == m.mem[v + 4] == 100
     panel(shift=True, number=6)
+    # Tap Lock to latch it, then pass through the stock raw movement
+    # comparison path with Lock physically released.
+    panel(lock=True)
+    panel()
+    assert m.mem[c['CTRLSTATE']] & 1 and m.mem[0x3c01] == 3
+    set_pot(m, 0, 125, stock_fallback=True)
+    assert m.mem[v] == m.mem[v + 4] == 110
+    panel(lock=True)
+    panel()
+    assert not m.mem[c['CTRLSTATE']] and m.mem[0x3c01] == 0
+    panel(shift=True, number=6, down=True)
+    assert m.mem[v] == m.mem[v + 4] == 100
+    panel(shift=True, number=6)
     panel(shift=True, lock=True)
     panel(shift=True)
     panel()
@@ -167,6 +182,12 @@ def run_suite(flash, labels):
         panel(number=number, down=True)
         panel(number=number)
         assert m.mem[0x3bf8 + number] == 3
+    panel(encoder=True)
+    assert m.mem[0x3e8d] == 9
+    m.mem[0x3bf8] = m.mem[0x213e] = 1
+    panel()
+    assert m.mem[0x3ded] == 1
+    m.mem[0x3ded] = 0
     panel(number=8, down=True)
     assert m.mem[2] == 1 and m.mem[0x3c00] == 3
     panel(number=8)
@@ -226,6 +247,77 @@ def run_suite(flash, labels):
     panel(number=5)
     finish_save(m)
 
+    # Use the real encoder ADC switch and panel loop for the shortcut.
+    m = boot()
+    del m.stubs[0x3ac0], m.stubs[0x3e6a]
+    m.stubs.update({address: lambda _: None for address in (0xc36, 0xe92, 0x69d2)})
+
+    def click_ticks(count):
+        for _ in range(count):
+            m.r[24] = 0x10  # One call for every 16th stock panel scan.
+            m.call(labels['pattern_panel_clock'])
+
+    def double_click():
+        panel(encoder=True)
+        panel()
+        click_ticks(64)
+        panel(encoder=True)
+        panel()
+
+    panel(encoder=True)
+    assert m.mem[0x3dd4] == build.HOLD and m.mem[c['PLAYPAT']] == 0
+    m.mem[0x3a9d] = 0x0f
+    m.call(0x38)
+    assert m.mem[0x3a9d] == 0x10
+    assert m.mem[c['ENC_WINDOW']] == c['ENC_DOUBLE_TICKS'] - 1
+    panel(encoder=True)
+    panel()
+    click_ticks(5)
+    panel(encoder=True)  # Bounce under the minimum interval.
+    panel()
+    assert m.mem[c['PLAYPAT']] == 0
+    click_ticks(40)
+    panel(encoder=True)
+    panel()
+    assert m.mem[c['PLAYPAT']] == 1 and m.mem[c['EDITPAT']] == 0
+    panel_status([0x7c, 0x40, 0, 0x77], [])
+
+    panel(encoder=True)
+    panel()
+    click_ticks(c['ENC_DOUBLE_TICKS'])
+    panel(encoder=True)
+    panel()
+    assert m.mem[c['PLAYPAT']] == 1 and m.mem[c['ENC_WINDOW']]
+    panel(shift=True)
+    panel()
+    assert not m.mem[c['ENC_WINDOW']]
+    double_click()
+    assert m.mem[c['PLAYPAT']] == 0
+
+    panel(number=7, down=True)
+    panel(number=7)
+    tick(m, 1)
+    double_click()
+    assert m.mem[c['PLAYPAT']] == 0 and m.mem[c['QUEUEPAT']] == 1
+    double_click()
+    assert m.mem[c['PLAYPAT']] == 0 and m.mem[c['QUEUEPAT']] == 0xff
+    double_click()
+    tick(m, 191)
+    assert m.mem[c['PLAYPAT']] == 0
+    tick(m, 1)
+    assert m.mem[c['PLAYPAT']] == 1 and m.mem[c['EDITPAT']] == 0
+
+    m = boot()
+    key(m, 2)
+    set_pot(m, 0, 25, snap=1)
+    assert m.mem[v] == 100  # Explicit Snap still applies in B.
+    set_pot(m, 0, 100, snap=1)
+    set_pot(m, 0, 50, snap=1)
+    assert m.mem[v] == 50
+    key(m, 1)
+    set_pot(m, 0, 35, snap=0)
+    assert m.mem[v] == 35  # Leaving B does not force Snap in A either.
+
     for external in (False, True):
         m = boot()
         m.mem[v:v + 64] = bytes(64)
@@ -244,14 +336,13 @@ def run_suite(flash, labels):
         key(m, 4)
         assert m.mem[c['EDITPAT']] == 1 and m.mem[c['PLAYPAT']] == 0
         set_pot(m, 0, 30)
-        assert m.mem[v] == 100  # pickup blocks an initial jump
-        set_pot(m, 0, 100)
+        assert m.mem[v] == 30  # Jump remains active when an A/B slot is selected.
         set_pot(m, 0, 70)
         assert m.mem[v] == 70
 
         # Shift+large pots edit the harmony of B while A keeps its own.
         m.mem[0x2283] = 1
-        for pot, setting in ((66, 33), (67, 12)):
+        for pot, setting in ((64, 33), (65, 12)):
             set_pot(m, pot, 0)
             set_pot(m, pot, setting)
         m.mem[0x2283] = 0

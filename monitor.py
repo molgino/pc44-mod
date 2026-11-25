@@ -9,7 +9,7 @@ EDIT_FIELDS = (
     ('TLEN', 4, 1, 16), ('SPD', 4, 0, 6), ('DIR', 4, 0, 3), ('MODE', 4, 0, 2),
     ('OCT', 4, 0, 6), ('CHN', 4, 0, 15),
     ('SCALE', 1, 0, 10), ('ROOT', 1, 0, 11),
-    ('SWING', 1, 0, 6), ('BPM_REG', 1, 30, 250), ('MREQ', 4, 0, 1), ('VTRIM', 4, 0, 127),
+    ('SWING', 1, 0, 6), ('BPM_REG', 1, 30, 250), ('MREQ', 0, 0, 0), ('VTRIM', 4, 0, 127),
 )
 
 
@@ -18,6 +18,9 @@ def constants(firmware):
     names = ('MRX_COUNT', 'MRX_COMMAND', 'MRX_TOKEN', 'MRX_SLOT', 'MRX_INDEX',
              'MRX_LOW', 'MRX_FIELD', 'MRX_HIGH', 'MRX_READY', 'MTX_BLOCK', 'MSTATUS')
     values = {name: 0x3ED0 + offset for offset, name in enumerate(names)}
+    # Reuse the old runtime mute bytes for a four-block priority queue.
+    values.update(MDIRTY=0x3E80, MDIRTY1=0x3E81, MDIRTY2=0x3E82, MDIRTY3=0x3E83,
+                  MTRIM_DIRTY=0x3EDF)
 
     shadow = {}
     offset = SHADOW
@@ -31,7 +34,7 @@ def constants(firmware):
         other = shadow.get(current, current)
         return (current & 255, current >> 8, other & 255, other >> 8)
 
-    header = ('TLEN', 'SPD', 'DIR', 'MODE', 'OCT', 'CHN', 'MUTE', 'MREQ', 'SCALE', 'ROOT', 'SWING')
+    header = ('TLEN', 'SPD', 'DIR', 'MODE', 'OCT', 'CHN', 'MREQ', 'MREQ', 'SCALE', 'ROOT', 'SWING')
     steps = ('V', 'N', 'P', 'L', 'R', 'CT', 'NUDGE')
     for symbol, fields in (('MON_HEADER_TABLE', header), ('MON_STEP_TABLE', steps)):
         values[symbol] = ', '.join(str(byte) for field in fields for byte in addresses(field))
@@ -47,6 +50,11 @@ monitor_init:
     sts MRX_COUNT,r1
     sts MRX_READY,r1
     sts MTX_BLOCK,r1
+    sts MDIRTY,r1
+    sts MDIRTY1,r1
+    sts MDIRTY2,r1
+    sts MDIRTY3,r1
+    sts MTRIM_DIRTY,r1
     ldi r26,lo8(MSTATUS)
     ldi r27,hi8(MSTATUS)
     ldi r19,5
@@ -147,6 +155,73 @@ MRreset:
     sts MRX_COUNT,r1
     ret
 
+; Schedule the changed slot, lane and row ahead of the normal sweep.
+; Entries are (block * 8 + track * 2 + slot + 1); zero is empty.
+monitor_queue_step:
+    lds r18,0x3dd8
+    ldi r30,lo8(monitor_modes)
+    ldi r31,hi8(monitor_modes)
+    add r30,r18
+    adc r31,r1
+    call lpmz
+    tst r20
+    brne MQstep
+    ret
+MQstep:
+    mov r18,r24
+    swap r18
+    andi r18,3
+    rjmp MQkey
+monitor_queue_header:
+    lds r18,EDTRK
+    clr r20
+MQkey:
+    add r18,r18
+    add r20,r20
+    add r20,r20
+    add r20,r20
+    add r18,r20
+    lds r20,EDITPAT
+    add r18,r20
+    inc r18
+    ldi r26,lo8(MDIRTY)
+    ldi r27,hi8(MDIRTY)
+    ldi r19,4
+MQscan:
+    ld r20,x+
+    cp r20,r18
+    breq MQreturn
+    tst r20
+    breq MQstore
+    dec r19
+    brne MQscan
+    ; The sweep covers any older data displaced by a fast group gesture.
+    ldi r20,0x80
+    sts MTX_BLOCK,r20
+MQstore:
+    sbiw r26,1
+    st x,r18
+MQreturn:
+    ret
+
+monitor_queue_trim:
+    ldi r20,1
+    sts MTRIM_DIRTY,r20
+    ret
+
+monitor_queue_clear:
+    mov r18,r24
+    swap r18
+    andi r18,3
+    ldi r20,1
+    call MQkey
+monitor_undo:
+monitor_resync:
+    ; Bulk edits get a full sweep at one block per available tick.
+    ldi r20,0x80
+    sts MTX_BLOCK,r20
+    ret
+
 ; The main loop queues each complete packet in the stock USB TX ring.
 ; Leave room for the largest frame and skip a partially sent stock message.
 monitor_tick:
@@ -173,13 +248,26 @@ monitor_tick:
     call monitor_status
     tst r24
     brne MTdone
+    lds r24,MDIRTY
+    tst r24
+    brne MTpriority
+    lds r24,MTRIM_DIRTY
+    tst r24
+    brne MTtrim
     lds r24,0x3de1
     andi r24,63
     cpi r24,1
     breq MTtrim
+    lds r25,MTX_BLOCK
+    sbrc r25,7
+    rjmp MTblock
     andi r24,3
     brne MTdone
+MTblock:
     call monitor_block
+    rjmp MTdone
+MTpriority:
+    call monitor_priority
     rjmp MTdone
 MTtrim:
     call monitor_trims
@@ -251,29 +339,23 @@ MEwrite:
     sbiw r30,6
     lds r24,EDITPAT
     cp r28,r24
-    breq MEpickup
+    breq MEstore
     adiw r30,2
-    rjmp MEstore
-MEpickup:
-    ldi r24,1
-    sts PATPICKUP,r24
 MEstore:
     call monitor_pointer
     add r26,r18
     adc r27,r1
     cpi r16,16
     breq MEtempo
+    cpi r16,18
+    breq MEtrim
     st x,r17
-    cpi r16,17
-    brne MEok
-    in r24,0x02
-    tst r24
-    brne MEok
-    ldi r26,lo8(MUTE)
-    ldi r27,hi8(MUTE)
-    add r26,r18
-    adc r27,r1
-    st x,r17
+    rjmp MEok
+MEtrim:
+    mov r24,r18
+    mov r18,r17
+    call trim_store
+    call monitor_queue_trim
     rjmp MEok
 MEtempo:
     call monitor_set_tempo
@@ -335,6 +417,7 @@ MTEskip:
     ret
 
 monitor_trims:
+    sts MTRIM_DIRTY,r1
     call monitor_begin
     ldi r24,0x38
     call monitor_byte
@@ -404,23 +487,15 @@ monitor_status_byte:
     adc r27,r1
     ld r24,x
     andi r24,15
-    ldi r26,lo8(MUTE)
-    ldi r27,hi8(MUTE)
+    ldi r26,lo8(VTRIM)
+    ldi r27,hi8(VTRIM)
     add r26,r16
     adc r27,r1
     ld r18,x
     tst r18
-    breq MSqueued_mute
+    brne MSfires
     ori r24,0x10
-MSqueued_mute:
-    ldi r26,lo8(MREQ)
-    ldi r27,hi8(MREQ)
-    add r26,r16
-    adc r27,r1
-    ld r19,x
-    cp r18,r19
-    breq MSfires
-    ori r24,0x20
+    ret
 MSfires:
     ldi r26,lo8(CACT)
     ldi r27,hi8(CACT)
@@ -453,12 +528,29 @@ MSext:
 ; Alternating playing and inactive slot per track. Send headers and
 ; velocities for all tracks first. Read either RAM copy without swapping.
 ; r29: bit 0 slot, bit 6 inactive, bit 7 read from shadow.
+monitor_priority:
+    lds r28,MDIRTY
+    lds r24,MDIRTY1
+    sts MDIRTY,r24
+    lds r24,MDIRTY2
+    sts MDIRTY1,r24
+    lds r24,MDIRTY3
+    sts MDIRTY2,r24
+    sts MDIRTY3,r1
+    dec r28
+    mov r29,r28
+    andi r29,1
+    ori r29,0x40
+    rjmp MBsource
+
 monitor_block:
     lds r28,MTX_BLOCK
     mov r24,r28
     inc r24
-    andi r24,63
+    sbrc r24,6
+    clr r24
     sts MTX_BLOCK,r24
+    andi r28,63
     lds r29,PLAYPAT
     sbrs r28,0
     rjmp MBsource
@@ -516,6 +608,10 @@ monitor_block_byte:
     add r18,r17
     rjmp MBload
 MBheader:
+    cpi r17,6
+    breq MBmute
+    cpi r17,7
+    breq MBmute
     cpi r17,11
     brcc MBextra
     ldi r30,lo8(monitor_header)
@@ -534,6 +630,18 @@ MBload:
     add r26,r18
     adc r27,r1
     ld r24,x
+    ret
+MBmute:
+    ldi r26,lo8(VTRIM)
+    ldi r27,hi8(VTRIM)
+    add r26,r16
+    adc r27,r1
+    ld r18,x
+    clr r24
+    tst r18
+    brne MBmute_done
+    inc r24
+MBmute_done:
     ret
 MBextra:
     cpi r17,11
@@ -559,8 +667,7 @@ MBfocus:
 MBlock:
     cpi r17,14
     brne MBslot
-    lds r24,0x3a57
-    ret
+    jmp ctrl_active
 MBslot:
     mov r24,r29
     andi r24,1
@@ -597,6 +704,8 @@ monitor_byte:
     ldi r22,1
     jmp 0x099a
 
+monitor_modes:
+    .byte 0, 1, 2, 0, 3, 5, 4, 0, 0, 0, 0, 0, 0, 0, 6, 7
 monitor_header:
     .byte MON_HEADER_TABLE
 monitor_steps:

@@ -25,7 +25,7 @@ with contextlib.redirect_stdout(io.StringIO()):
 _, img = decode(open(SYX, 'rb').read())
 m = AVR(img)
 N, V, P, R, L = (B.RAM[k] for k in ('N', 'V', 'P', 'R', 'L'))
-SPD, CHN, DIR, MUTE, MREQ, LOOP, POS = 0x3E60, 0x3E64, 0x3E68, 0x3E80, 0x3E84, 0x3E7C, 0x3DEE
+SPD, CHN, DIR, MREQ, LOOP, POS = 0x3E60, 0x3E64, 0x3E68, 0x3E84, 0x3E7C, 0x3DEE
 TLEN, OCT, EDTRK, EDPAR = 0x3DF2, 0x3DE9, 0x3E8C, 0x3E8D
 DMODE, DVAL, RAWVAL = 0x3DD8, 0x3DD9, 0x3DF6
 sent, flow = [], []
@@ -161,22 +161,22 @@ m.mem[DVAL] = 13; call('rendhook'); t2 = text()
 check(t1 == 'P070' and t2 == 'c2-3', 'Anzeige %s / %s' % (t1, t2))
 m.mem[P] = 9
 
-print('5) Mute quantisiert')
-clear_steps(); m.mem[V] = 100; m.mem[V + 16] = 100; m.mem[TLEN] = 4
-start(); tick(12 * 2)
-m.mem[0x3E10 + 3] = 60; poti(0, 3, 70, shift=1)      # Shift + nach rechts: Spur 1 stumm (läuft gerade)
-check(m.mem[MREQ] == 1 and m.mem[MUTE] == 0, 'Mute-Wunsch gespeichert, noch nicht aktiv')
-m.mem[DMODE] = 12; m.mem[DVAL] = 0; m.mem[0x3DD4] = 5; call('rendhook')
-check(text().rstrip() == 'oFF.', 'Anzeige wartet: %s' % text())
-ev = tick(12 * 16)
-t1 = [e[0] for e in ons(ev) if e[1] == 0x90]
-check(t1 == [], 'Spur 1 verstummt ab dem nächsten Pattern-Durchlauf')
-poti(0, 3, 50, shift=1); ev = tick(12 * 8)
-check([e[0] for e in ons(ev) if e[1] == 0x90] == [24, 72], 'Unmute ebenfalls erst am Pattern-Ende (Step %s)' % [e[0] for e in ons(ev) if e[1] == 0x90])
-m.mem[TLEN] = 16
+print('5) Volume zero releases held notes')
+clear_steps(); m.mem[V] = 100; m.mem[V + 16] = 100; m.mem[TLEN] = m.mem[TLEN + 1] = 4
+m.mem[L] = 15
+start(); tick(1)
+poti(0, 64, 0)
+ev = tick(48)
+check(any(event[1] == 0x80 for event in ev), 'Volume zero sends Note Off immediately')
+check(not any(event[1] == 0x90 for event in ev), 'Track 1 sends no Note On at zero')
+check(any(event[1] == 0x91 for event in ev), 'Track 2 continues')
+poti(0, 64, 64)
+check(any(event[1] == 0x90 for event in tick(48)), 'Restoring volume resumes the track')
+check(m.mem[V] == 100, 'Volume leaves the original step velocity intact')
+m.mem[TLEN] = m.mem[TLEN + 1] = 16
 
 print('6) Edit-Seite')
-m.mem[0x220e] = 1; m.mem[0x3bf3] = 0
+m.mem[0x220e] = 1; m.mem[0x3bf3] = 0; m.mem[0x2fa3] = 255
 call('isedit'); check(m.r[25] == 1, 'Edit-Seite im SEq-Modus erkannt')
 check(poti(0, 40, 50) == 'bearbeitet' and m.mem[EDTRK] == 2, 'Poti Reihe 5 wählt Spur 3, sendet kein MIDI')
 def edbtn(k):
@@ -198,6 +198,11 @@ enc(True, 3); check(m.mem[EDTRK] == 3, 'Spurwahl begrenzt auf 4')
 call('ledhook'); check(list(m.mem[0x3bf9:0x3c01]) == [3, 0, 0, 0, 0, 0, 0, 0], 'LED zeigt gewählten Parameter (Taste 1)')
 m.mem[2] = 0; edbtn(8); check(m.mem[2] == 1, 'Taste 8 startet auf der Edit-Seite')
 edbtn(8); check(m.mem[2] == 0, 'Taste 8 nochmals: Stopp')
+m.mem[0x2fa3] = 0; call('seqedit'); m.mem[0x2fa3] = 255; call('seqedit')
+enc(True, 2)
+check(m.mem[EDPAR] == 9 and m.mem[0x3ded] == 2 and show() == '5h58',
+      f'Edit encoder push selects Swing: {m.mem[EDPAR]=}, {m.mem[0x3ded]=}, {show()=}')
+m.mem[0x3ded] = 0
 flow.clear(); m.r[24] = 0; m.mem[0x2218] = 5; call('seqedit'); call('seqedit2')
 check(flow == ['fw-edit1', 'fw-edit2'], 'ohne SEq: Original-Edit der Firmware')
 m.mem[0x2218] = 8; m.mem[0x220e] = 0
@@ -231,7 +236,7 @@ for t in range(4):
     m.mem[SPD + t] = t + 1; m.mem[CHN + t] = 15 - t; m.mem[DIR + t] = t; m.mem[TLEN + t] = 13 + t; m.mem[OCT + t] = t + 2; m.mem[MREQ + t] = t & 1
 m.mem[0x3DE2] = 7; m.mem[0x3DE8] = 5; m.mem[0x3DED] = 4; m.mem[3] = 133
 snap = {k: bytes(m.mem[a:a + n]) for k, (a, n) in dict(N=(N, 64), V=(V, 64), P=(P, 64), R=(R, 64), L=(L, 64),
-        T=(0x3DE2, 12), TL=(TLEN, 4), S=(SPD, 12), MQ=(MREQ, 4), BPM=(3, 1)).items()}
+        T=(0x3DE2, 12), TL=(TLEN, 4), S=(SPD, 12), BPM=(3, 1)).items()}
 m.pagewrites.clear(); tick(60)
 check(m.pagewrites == {}, 'ohne Speichern keine EEPROM-Schreibvorgänge')
 m.mem[V + 5] = 111
@@ -248,11 +253,11 @@ m2 = AVR(img, ee); m2.stubs.update(m.stubs)
 m, keep = m2, m
 call('init')
 got = {k: bytes(m.mem[a:a + n]) for k, (a, n) in dict(N=(N, 64), V=(V, 64), P=(P, 64), R=(R, 64), L=(L, 64),
-       T=(0x3DE2, 12), TL=(TLEN, 4), S=(SPD, 12), MQ=(MREQ, 4), BPM=(3, 1)).items()}
+       T=(0x3DE2, 12), TL=(TLEN, 4), S=(SPD, 12), BPM=(3, 1)).items()}
 diff = [k for k in snap if snap[k][:1] != got[k][:1] or (k != 'T' and snap[k] != got[k])]
 tmask = lambda b: bytes(b[i] for i in (0, 6, 7, 8, 9, 10, 11))   # Skala, Grundton, Oktaven, Shuffle
 check(diff == [] and tmask(snap['T']) == tmask(got['T']), 'alles wiederhergestellt %s' % diff)
-check(list(m.mem[MUTE:MUTE + 4]) == [0, 1, 0, 1], 'Mute aktiv wie gespeichert')
+check(list(m.mem[MREQ:MREQ + 4]) == [0] * 4, 'Legacy mute bytes no longer silence a track after load')
 check(m.mem[0x0a26] | m.mem[0x0a27] << 8 == B.per(133), 'Timer auf gespeichertes Tempo 133')
 check(list(m.mem[POS:POS + 4]) == [0xff] * 4, 'Laufposition beginnt neu')
 m3 = AVR(img); m3.stubs.update(keep.stubs); m = m3; call('init')
@@ -425,27 +430,29 @@ m.mem[MODE] = 1; m.mem[CT + 10] = 0; poti(4, 10, 127); poti(4, 10, 120); check(m
 call('rendhook'); check(text() == 'tri ', 'Anzeige aktuelle Akkordart %r' % text())
 poti(4, 10, 5); poti(4, 10, 40); check(m.mem[CT + 10] == 2, 'Akkordart: übernommen')
 m.mem[MODE] = 0
-m.mem[0x3DE2] = 1; poti(0, 67, 120, shift=1); poti(0, 67, 110, shift=1); check(m.mem[0x3DE2] == 1, 'Skala: nicht eingefangen')
-poti(0, 67, 5, shift=1); check(m.mem[0x3DE2] == 0, 'Skala: übernommen')
-m.mem[0x3DED] = 3; poti(0, 64, 0, shift=1); poti(0, 64, 10, shift=1); check(m.mem[0x3DED] == 3, 'Shuffle: nicht eingefangen')
-poti(0, 64, 127, shift=1); check(m.mem[0x3DED] == 6, 'Shuffle: übernommen')
-m.mem[0x3DE8] = 0; poti(0, 66, 100, shift=1); poti(0, 66, 80, shift=1); check(m.mem[0x3DE8] == 0, 'Grundton: nicht eingefangen')
+m.mem[0x3DE2] = 1
+poti(0, 65, 120, shift=1); poti(0, 65, 110, shift=1)
+check(m.mem[0x3DE2] == 1, 'Scale on shifted pot 66 waits for pickup')
+poti(0, 65, 5, shift=1)
+check(m.mem[0x3DE2] == 0, 'Scale on shifted pot 66 picks up')
+m.mem[0x3DE8] = 0; poti(0, 64, 100, shift=1); poti(0, 64, 80, shift=1)
+check(m.mem[0x3DE8] == 0, 'Root on shifted pot 65 waits for pickup')
 check(poti(0, 65, 80) == 'bearbeitet' and m.mem[B.patterns.CONSTS['VTRIM1']] == 80,
-      'Poti 66: Velocity-Trim für Spur 2')
+      'Unshifted pot 66 still controls track 2 volume')
 poti(0, 65, 64)
 SNAP[0] = 0
-m.mem[V + 11] = 100; poti(0, 11, 20); check(m.mem[V + 11] == 20, 'Jump-Modus: sofort übernommen')
+m.mem[V + 11] = 100; poti(0, 11, 20)
+check(m.mem[V + 11] == 20, 'Jump mode applies immediately')
 
-print('19) Shift + Poti = Mute')
-m.mem[V + 16] = 77; m.mem[MREQ + 1] = 0
-poti(0, 16, 30); poti(0, 16, 31, shift=1)
-check(m.mem[MREQ + 1] == 1 and m.mem[MUTE + 1] == 1 and m.mem[V + 16] == 30, 'Shift + rechts: Spur 2 stumm, Step unverändert')
-call('rendhook'); check(text().rstrip() == 'oFF', 'Anzeige %r' % text())
-poti(0, 31, 90, shift=1); check(m.mem[MREQ + 1] == 1, 'anderes Poti der Spur, erste Bewegung rechts der Mitte: bleibt stumm')
-poti(0, 31, 80, shift=1); check(m.mem[MREQ + 1] == 0 and m.mem[MUTE + 1] == 0, 'Shift + links: Spur 2 wieder an')
-check(m.mem[V + 31] == 0, 'Step-Velocity von Poti 32 unverändert')
+print('19) Shift leaves step knobs and other large pots alone')
+m.mem[V + 16] = 77; m.mem[0x3DED] = 3
+poti(0, 16, 31, shift=1)
+poti(0, 66, 0, shift=1)
+poti(0, 67, 127, shift=1)
+check(m.mem[V + 16] == 77 and m.mem[0x3DED] == 3, 'Shifted knobs leave velocity and Swing unchanged')
+m.mem[0x3DED] = 0
 m.mem[0x3DE2] = 4; poti(0, 67, 30)
-check(m.mem[0x3DE2] == 4 and m.mem[B.patterns.CONSTS['VTRIM3']] == 30, 'Poti 68 ohne Shift: nur Velocity-Trim')
+check(m.mem[0x3DE2] == 4 and m.mem[B.patterns.CONSTS['VTRIM3']] == 30, 'Pot 68 controls track 4 volume')
 poti(0, 67, 64)
 v40 = m.mem[V + 40]; poti(5, 40, 90); check(m.mem[V + 40] == v40, 'Taste 5 verändert nicht mehr die Velocity')
 check(poti(0, 12, 50, setup=1) == 'setup', 'Setup-Seite: Firmware wie gehabt')
@@ -519,13 +526,10 @@ print('21) Durchlauf-Wechsel beim ersten Step')
 clear_steps(); m.mem[TLEN] = 4; m.mem[V + 3] = 100; m.mem[P + 3] = 10   # Step 4, Bedingung 1:2
 ev = run(48 * 6)
 check(on(ev) == [36, 132, 228], 'Bedingung 1:2 auf dem letzten Step: Durchlauf 1, 3, 5 (%s)' % on(ev))
-m.mem[P + 3] = 9; start(); tick(40)
-m.mem[0x3E10 + 3] = 60; poti(0, 3, 70, shift=1)
-ev = tick(48)
-check(on(ev) == [], 'Mute während Durchlauf: letzter Step des Durchlaufs ist schon nach dem Wechsel stumm (%s)' % on(ev))
-m.mem[0x3E10 + 3] = 60; poti(0, 3, 50, shift=1); start(); tick(30)
-m.mem[0x3E10 + 3] = 50; poti(0, 3, 70, shift=1); ev = tick(18)
-check(on(ev) == [36 - 30], 'Mute im laufenden Durchlauf: Step 4 dieses Durchlaufs spielt noch (%s)' % on(ev))
+m.mem[P + 3] = 9; start(); tick(30)
+poti(0, 64, 0)
+check(on(tick(18)) == [], 'Volume zero silences the next step even inside the same cycle')
+poti(0, 64, 64)
 m.mem[TLEN] = 16
 
 print('22) Ctrl all (Lock + Poti)')
@@ -571,7 +575,7 @@ check([m.mem[NUD + T2 + k] for k in (0, 3, 1)] == [3, 3, 6], 'Taste 5: Nudge all
 v0 = bytes(m.mem[V + T2:V + T2 + 16])
 poti(6, 26, 0, lock=1); poti(6, 26, 127, lock=1)
 check(bytes(m.mem[V + T2:V + T2 + 16]) == v0 and m.mem[V + T2 + 1] == 0, 'Lock + Taste 6: nichts (kein Löschen)')
-m.mem[0x3DE2] = 0; poti(0, 67, 120, shift=1, lock=1)
+m.mem[0x3DE2] = 0; poti(0, 65, 120, shift=1, lock=1)
 check(m.mem[0x3DE2] == 10, 'Shift + grosses Poti mit Lock: Skala')
 m.mem[0x212f] = 1; flow.clear(); call('locktog')
 check(m.mem[0x212f] == 0 and flow == ['lock-weiter'], 'Lock im SEq-Spielmodus: keine Anzeige-Verriegelung')

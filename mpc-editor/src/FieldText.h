@@ -8,7 +8,7 @@ namespace pc44 {
 constexpr const char* FieldNames[]{
     "Velocity", "Pitch", "Chance", "Gate", "Ratchet", "Chord", "Nudge",
     "Steps", "Speed", "Direction", "Mode", "Octave", "MIDI Ch.",
-    "Scale", "Root", "Shuffle", "Tempo", "Mute", "Trim"
+    "Scale", "Root", "Swing", "Tempo", "Legacy Mute", "Volume"
 };
 constexpr const char* NoteNames[]{"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
 constexpr const char* Scales[]{"Chromatic", "Major", "Minor", "Dorian", "Phrygian", "Lydian",
@@ -107,7 +107,6 @@ inline std::string fieldText(int field, int value, int context = 0, bool compact
         case Root: return NoteNames[value];
         case Shuffle: return std::to_string(shuffle[value]) + "%";
         case BPM: return std::to_string(value) + " BPM";
-        case Mute: return value ? "Muted" : "Unmuted";
         case Trim: return std::to_string(static_cast<int>(std::lround(value * 100.0 / 64))) + "%";
         default: return std::to_string(value);
     }

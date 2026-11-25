@@ -17,7 +17,7 @@ BLUE = "ffa7d9ff"
 AMBER = "ffffbe70"
 STEP_FIELDS = ("Velocity", "Pitch", "Chance", "Gate", "Ratchet", "Chord", "Nudge")
 SETTINGS = ("Steps", "Speed", "Direction", "Mode", "Octave", "MIDI Channel",
-            "Scale", "Root", "Shuffle", "Tempo", "Mute", "Trim")
+            "Scale", "Root", "Swing", "Tempo", "Volume")
 
 
 def dump(name, content):
@@ -240,7 +240,7 @@ def setup_page():
         group, x, y, w = setting_rect(i)
         parts += [
             label(title, (x + 12, y + 6, w - 24, 24), 16, MUTED),
-            label(f"{title} current", (x + 12, y + 30, w - 24, 30), 22, param=92 + i, bold=True),
+            label(f"{title} current", (x + 12, y + 30, w - 24, 30), 22, param=92 + i + (i == 10), bold=True),
             button(f"Select {title}", (x, y, w, 69), 85, f"{group}_1.png", f"{group}_0.png",
                    len(SETTINGS), i, focus=False),
         ]

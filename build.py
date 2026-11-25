@@ -10,19 +10,19 @@ Spielmodus (Start direkt in "SEq"):
   Taste 2 + Poti:         Notenlänge 0.08..16 Steps                "L0.50" / "L004"
   Taste 3 + Poti:         Wahrscheinlichkeit 10..100 %, dann Bedingung 1:2..8:8   "P070" / "c2-3"
   Taste 4 + Poti:         Ratchet 1..4 "r002"; in Chord-Spuren Akkordart  "tri", "SuS2", "7th" ...
-  Shift + Poti:           Mute der Spur: nach rechts drehen = stumm, nach links = an; wirkt am Ende des Patterns
   Taste 5 + Poti:         Nudge: Step -6..+6 Zwölftel eines Steps früher/später   "nd-3" / "nd 0" / "nd 3"
   Snap (Poti-Modus der Firmware): Wert wird erst übernommen, wenn das Poti den aktuellen Wert des Steps überfährt
-  Lock + Poti (+Taste 1-5): Ctrl all: Parameter aller aktiven Steps der Spur relativ verschieben
+  Lock halten oder kurz antippen: Ctrl All; Poti verschiebt den Parameter der aktiven Steps relativ
   Taste 6 + Poti:         Spur löschen: Poti einer Spur ganz nach rechts  "CL 1" -> "CLr1"
   Taste 7 / 8:            Start (FA) / Stopp (FC), Clock nur während der Wiedergabe
-  Grosse Potis:           Velocity-Trim der Spuren 1–4
-  Shift + Poti 65/67/68:  Shuffle / Grundton und Skala des Edit-Patterns
-  Encoder:                Tempo 30..250 BPM ("t120")
+  Grosse Potis:           Velocity-Trim der Spuren 1–4; bei null verstummt die Spur
+  Shift + Poti 65/66:     Grundton / Skala des Edit-Patterns
+  Encoder:                Tempo 30..250 BPM ("t120"), doppelter Druck wechselt A/B
 Edit-Seite (Shift + Edit im SEq-Modus):
   Poti einer Spur bewegen = Spur wählen;  Taste 1..6 = Parameter wählen, Encoder = Wert
   1 Spur "tr 1"   2 Länge "LP16"   3 Oktave "oc 0"   4 Speed "1-8".."2-1"   5 Kanal "Ch01"   6 Richtung "For/rEu/PinG/rnd"
   7 Modus "nOtE" / "Chrd" / "PAd"
+  Encoder drücken und drehen = Swing.
   Taste 8 = Start/Stopp umschalten. Tasten-LED zeigt den gewählten Parameter.
 Externe Clock: kommt MIDI-Clock (USB oder DIN), läuft der Sequencer synchron dazu,
   Start/Continue/Stop werden befolgt, Encoder zeigt "E120" (gemessen). Ohne Clock: interner Takt.
@@ -60,7 +60,7 @@ SCALES = [  # (Anzeige als 7-Segment-Codes, Intervalle)
     ((0x73, 0x40, 0x77, 0x79), [0, 3, 5, 7, 10]),          # P-AE
     ((0x7c, 0x38, 0x3e, 0x79), [0, 3, 5, 6, 7, 10]),       # bLUE
 ]
-POT_SCALE, POT_ROOT = 67, 66   # interne Poti-Nummern (0-basiert) der großen Potis
+POT_SCALE, POT_ROOT = 65, 64   # interne Poti-Nummern (0-basiert) der großen Potis
 # Längen-Stufen: Ticks (12 = ein 16tel), Anzeigezahl, Dezimalpunkt nach 1. Ziffer
 LENGTHS = [(1, 8, 1), (3, 25, 1), (6, 50, 1), (9, 75, 1), (12, 1, 0), (24, 2, 0), (36, 3, 0), (48, 4, 0),
            (60, 5, 0), (72, 6, 0), (84, 7, 0), (96, 8, 0), (120, 10, 0), (144, 12, 0), (168, 14, 0), (192, 16, 0)]
@@ -108,7 +108,7 @@ EEREGIONS = [  # RAM-Adresse, Länge, Minimum, Maximum, Ersatzwert (ausserhalb -
     (0x3E66, 1, 0, 15, 2),      # Kanal Spur 3
     (0x3E67, 1, 0, 15, 3),      # Kanal Spur 4
     (0x3E68, 4, 0, 3, 0),       # Richtung
-    (0x3E84, 4, 0, 1, 0),       # Mute
+    (0x3E84, 4, 0, 0, 0),       # reservierte Mute-Bytes
     (0x0003, 1, 30, 250, 120),  # Tempo (GPIOR3)
     (0x3E04, 2, 0, 255, 0),    # Kennung (Offset 348 wie in v20, damit gespeicherte Patterns bleiben)
     (0x3DC8, 4, 0, 2, 0),      # Modus pro Spur (neu in v21)
@@ -353,8 +353,12 @@ Hdone:
     jmp 0x3ac0
 Hseq:
     call isseq
+    call ctrl_update
     tst r25
-    breq Htick
+    brne Hplay
+    sts ENC_WINDOW,r1
+    rjmp Htick
+Hplay:
     call pattern_keys
     lds r24,0x2216
     tst r24
@@ -380,13 +384,27 @@ Hpush:
     lds r24,0x230e
     lds r25,TEMPO_KEY
     sts TEMPO_KEY,r24
+    lds r18,0x2283
+    tst r18
+    breq Hpress
+    sts ENC_WINDOW,r1
+    rjmp Htick
+Hpress:
     tst r24
     breq Htick
     tst r25
     brne Htick
-    lds r25,0x2283
-    tst r25
-    brne Htick
+    lds r18,ENC_WINDOW
+    tst r18
+    breq Htempo
+    cpi r18,ENC_DEBOUNCE_LIMIT
+    brcc Htick
+    sts ENC_WINDOW,r1
+    call pattern_request_switch
+    rjmp Htick
+Htempo:
+    ldi r18,ENC_DOUBLE_TICKS
+    sts ENC_WINDOW,r18
     sts 0x3dd8,r1
     ldi r24,0xff
     sts LEDROW,r24
@@ -550,7 +568,7 @@ CLodd:
     ret
 
 ; Spur r24: Sub-Tick weiterzählen. Bei neuem Step: vorheriger <- aktueller <- nächster, dann den
-; nächsten Step vorausberechnen (Position, Durchlauf, Mute, Wahrscheinlichkeit).
+; nächsten Step vorausberechnen (Position, Durchlauf, Wahrscheinlichkeit).
 trkstep:
     mov r17,r24
     ldi r26,lo8(TSUB)
@@ -566,7 +584,6 @@ trkstep:
     adc r31,r1
     ldi r19,0x01
     st z,r19
-    call mreqmute
     call compnext
     rjmp TSnew
 TSa:
@@ -639,27 +656,7 @@ TSnew:
     add r26,r17
     adc r27,r1
     ld r18,x
-    andi r18,0xf7
-    sbrc r18,2
-    ori r18,0x08
-    andi r18,0xfb
-    st x,r18
-    sbrc r18,0
-    call mreqmute
-    ldi r30,lo8(MUTE)
-    ldi r31,hi8(MUTE)
-    add r30,r17
-    adc r31,r1
-    ld r19,z
-    ldi r26,lo8(FLG)
-    ldi r27,hi8(FLG)
-    add r26,r17
-    adc r27,r1
-    ld r18,x
-    tst r19
-    breq TSm0
-    ori r18,0x04
-TSm0:
+    andi r18,0xf3
     st x,r18
 
 ; nächsten Step der Spur r17 bestimmen -> POS, ACT (Durchlauf zählt beim ersten Step des neuen Durchlaufs)
@@ -884,6 +881,17 @@ PPm2:
 ; Ereignisse einer Spur pro Tick (r24 = Spur): Ausklingen, Ratchet-Raster, Note-On
 trackev:
     mov r17,r24
+    ldi r26,lo8(VTRIM)
+    ldi r27,hi8(VTRIM)
+    add r26,r17
+    adc r27,r1
+    ld r18,x
+    tst r18
+    brne TEoff
+    ; Retry any Note Off that could not queue when the trim first hit zero.
+    mov r24,r17
+    jmp trim_silence
+TEoff:
     ldi r26,lo8(OFF)
     ldi r27,hi8(OFF)
     add r26,r17
@@ -898,9 +906,6 @@ trackev:
     call noteoff
 TEchk:
 ; --- aktueller Step: d = TSUB - Verschiebung
-    call flags
-    sbrc r18,2
-    rjmp TEnx
     ldi r26,lo8(CACT)
     ldi r27,hi8(CACT)
     add r26,r17
@@ -939,20 +944,6 @@ TEc2:
     jmp TEon
 ; --- nächster Step, vorgezogen: ab TSUB = Steplänge - Verschiebung
 TEnx:
-    call flags
-    ldi r26,lo8(MUTE)
-    ldi r27,hi8(MUTE)
-    sbrc r18,0
-    ldi r26,lo8(MREQ)
-    sbrc r18,0
-    ldi r27,hi8(MREQ)
-    add r26,r17
-    adc r27,r1
-    ld r18,x
-    tst r18
-    breq TEnx1
-    rjmp TEpv
-TEnx1:
     ldi r26,lo8(ACT)
     ldi r27,hi8(ACT)
     add r26,r17
@@ -982,9 +973,6 @@ TEnx1:
     jmp TEon
 ; --- vorheriger Step, verzögert: d = TSUB + Länge des vorherigen Steps - Verschiebung
 TEpv:
-    call flags
-    sbrc r18,3
-    rjmp TEret0
     ldi r26,lo8(PACT)
     ldi r27,hi8(PACT)
     add r26,r17
@@ -1015,29 +1003,6 @@ TEpv:
     breq TEret0
     jmp TEon
 TEret0:
-    ret
-
-; Mute der Spur r17 aus dem Wunsch übernehmen (Beginn eines Durchlaufs)
-mreqmute:
-    ldi r26,lo8(MREQ)
-    ldi r27,hi8(MREQ)
-    add r26,r17
-    adc r27,r1
-    ld r18,x
-    ldi r26,lo8(MUTE)
-    ldi r27,hi8(MUTE)
-    add r26,r17
-    adc r27,r1
-    st x,r18
-    ret
-
-; Flags der Spur r17 -> r18
-flags:
-    ldi r26,lo8(FLG)
-    ldi r27,hi8(FLG)
-    add r26,r17
-    adc r27,r1
-    ld r18,x
     ret
 
 ; X = Positions-Feld (POS/CPOS/PPOS): Step-Index der Spur r17 -> r19
@@ -1171,6 +1136,11 @@ TEon:
     add r26,r19
     adc r27,r1
     ld r18,x
+    tst r18
+    brne TEvel
+    pop r18
+    ret
+TEvel:
     call trim_velocity
     push r18
     ldi r26,lo8(L)
@@ -1311,18 +1281,7 @@ stopseq:
     call SEND3
 SPnc:
     out 0x02,r1
-    call flushnotes
-    ldi r26,lo8(MREQ)
-    ldi r27,hi8(MREQ)
-    ldi r30,lo8(MUTE)
-    ldi r31,hi8(MUTE)
-    ldi r19,0x04
-SPm:
-    ld r18,x+
-    st z+,r18
-    dec r19
-    brne SPm
-    ret
+    jmp flushnotes
 
 flushnotes:
     sts OFF,r1
@@ -1384,16 +1343,6 @@ TIl:
     add r26,r18
     adc r27,r1
     st x,r1
-    ldi r26,lo8(MUTE)
-    ldi r27,hi8(MUTE)
-    add r26,r18
-    adc r27,r1
-    st x,r1
-    ldi r26,lo8(MREQ)
-    ldi r27,hi8(MREQ)
-    add r26,r18
-    adc r27,r1
-    st x,r1
     inc r18
     cpi r18,0x04
     brne TIl
@@ -1404,84 +1353,72 @@ TIl:
 
 ; ================================================================ Poti: Taste halten + drehen = Step bearbeiten
 potisend:
+    ; The stock fallback uses the same raw history and pickup as the
+    ; early scanner hook. Never consume a movement before Ctrl All sees it.
     call isseq
     tst r25
-    brne PSplay
+    breq PSed1
+    lds r24,0x2b1a
+    cpi r24,2
+    brne PSmode
+    lds r26,0x3a56
+    ldi r27,0
+    subi r26,0x7b
+    sbci r27,0xdd
+    ld r24,x
+PSmode:
+    jmp SQ2
+PSed1:
     call isedit
     tst r25
-    brne PSed1
-PSedo:
-    jmp PSorig
-PSed1:
+    brne PSed
+    rjmp PSorig
+PSed:
     lds r24,0x3a56
     cpi r24,64
-    brcc PSedo
+    brcs PSedtrack
+    jmp PStrim
+PSedtrack:
     swap r24
     andi r24,0x0f
     sts EDTRK,r24
-    jmp 0x136e
-PSplay:
-    lds r24,SAVEPH
-    cpi r24,1
-    brcs PSeditable
-    cpi r24,PPROMOTE
-    brcc PSeditable
     jmp PSend
-PSeditable:
+PSplay:
     lds r24,0x3a56
+    cpi r24,64
+    brcs PSeditable
     lds r20,0x2283
     tst r20
-    breq PSnsh
-    cpi r24,64
-    brcs PSsh
-    rjmp PSglobals
-PSsh:
-    lds r18,RAWVAL
-    lds r19,PREV
-    ldi r20,0x00
-    cpi r19,0xff
-    brne PSsh1
-    cpi r18,64
-    brcs PSsh2
-    ldi r20,0x01
-    rjmp PSsh2
-PSsh1:
-    cp r19,r18
-    brcc PSsh2
-    ldi r20,0x01
-PSsh2:
-    ldi r21,0x0c
-    sts 0x3dd8,r21
-    ldi r21,HOLD
-    sts 0x3dd4,r21
-    ldi r21,0xff
-    sts LEDROW,r21
-    jmp PSmu
-PSnsh:
-    lds r20,0x3a57
-    tst r20
-    breq PSnlk
-    cpi r24,64
-    brcc PSnlk
-    jmp PSall
-PSnlk:
-    cpi r24,64
-    brcs PSseq
+    brne PSeditable
     jmp PStrim
+PSeditable:
+    lds r20,SAVEPH
+    tst r20
+    breq PSroute
+    cpi r20,PPROMOTE
+    brcc PSroute
+    jmp PSend
+PSroute:
+    lds r20,0x2283
+    tst r20
+    brne PSglobals
+    push r24
+    call ctrl_active
+    mov r20,r24
+    pop r24
+    tst r20
+    breq PSseq
+    jmp PSall
 PSglobals:
-    cpi r24,POTSWING
+    cpi r24,POTROOT
     brne PSn0
-    jmp PSswing
+    jmp PSroot
 PSn0:
     cpi r24,POTSCALE
     brne PSn1
     jmp PSscale
 PSn1:
-    cpi r24,POTROOT
-    breq PSrootgo
     jmp PSend
-PSrootgo:
-    jmp PSroot
 PSorig:
     lds r22,0x2284
     jmp 0x1362
@@ -1552,6 +1489,7 @@ PS2:
     add r26,r24
     adc r27,r1
     st x,r20
+    MONITOR_STEP_HOOK
     jmp PSend
 PS4:
     cpi r25,0x04
@@ -1615,26 +1553,6 @@ PS9n:
     ldi r26,lo8(NUDGE)
     ldi r27,hi8(NUDGE)
     jmp PSstore
-PSmu:
-    mov r21,r24
-    swap r21
-    andi r21,0x0f
-    ldi r26,lo8(MREQ)
-    ldi r27,hi8(MREQ)
-    add r26,r21
-    adc r27,r1
-    st x,r20
-    in r19,0x02
-    tst r19
-    brne PSmu2
-    ldi r26,lo8(MUTE)
-    ldi r27,hi8(MUTE)
-    add r26,r21
-    adc r27,r1
-    st x,r20
-PSmu2:
-    sts 0x3dd9,r21
-    jmp PSend
 PS6:
     mov r20,r18
     lsr r20
@@ -1645,12 +1563,10 @@ PS6:
     rjmp PSstore
 PStrim:
     subi r24,64
-    ldi r26,lo8(VTRIM)
-    ldi r27,hi8(VTRIM)
-    add r26,r24
-    adc r27,r1
     lds r18,RAWVAL
-    st x,r18
+    MONITOR_TRIM_HOOK
+    call trim_store
+    lds r18,RAWVAL
     sts 0x3dd9,r18
     ldi r20,0x10
     sts 0x3dd8,r20
@@ -1681,29 +1597,7 @@ PSscaleg:
     clr r1
     sts SCALE,r20
     sts 0x3dd9,r20
-    jmp PSend
-PSswing:
-    lds r18,RAWVAL
-    ldi r20,0x0a
-    sts 0x3dd8,r20
-    ldi r20,0xff
-    sts LEDROW,r20
-    ldi r20,HOLD
-    sts 0x3dd4,r20
-    ldi r25,0x0a
-    call snapgate
-    tst r19
-    brne PSswingg
-    jmp PSend
-PSswingg:
-    ldi r20,0x07
-    mul r18,r20
-    add r0,r0
-    adc r1,r1
-    mov r20,r1
-    clr r1
-    sts SWING,r20
-    sts 0x3dd9,r20
+    MONITOR_HEADER_HOOK
     jmp PSend
 PSroot:
     lds r18,RAWVAL
@@ -1727,6 +1621,7 @@ PSrootg:
     clr r1
     sts ROOT,r20
     sts 0x3dd9,r20
+    MONITOR_HEADER_HOOK
     jmp PSend
 ; Taste 6: Spur der Poti-Reihe löschen, sobald das Poti ganz rechts ist
 PSclr:
@@ -1771,6 +1666,7 @@ PSclgo:
     ldi r27,hi8(NUDGE)
     ldi r18,NUDGEDEF
     call fill16
+    MONITOR_CLEAR_HOOK
     jmp PSend
 
 ; X = Basis, r22 = Offset: 16 Bytes mit r18 füllen
@@ -1788,6 +1684,7 @@ PSstore:
     adc r27,r1
     st x,r20
     sts 0x3dd9,r20
+    MONITOR_STEP_HOOK
     jmp PSend
 
 PSend:
@@ -1797,6 +1694,14 @@ PSend:
 ; Poti r24 einer Spur: Parameter (Taste 1-5, sonst Velocity) aller aktiven Steps dieser Spur um die
 ; Poti-Bewegung verschieben, an den Grenzen begrenzen. Ausgeschaltete Steps bleiben unverändert.
 PSall:
+    ; A turn during a held Lock gesture keeps the previous latch on release.
+    lds r20,0x3a57
+    tst r20
+    breq PAselect
+    lds r20,CTRLSTATE
+    ori r20,6
+    sts CTRLSTATE,r20
+PAselect:
     mov r21,r24
     ldi r25,0x01
     lds r20,0x230f
@@ -1962,9 +1867,13 @@ PAskip:
     mov r25,r21
     swap r25
     andi r25,0x0f
+    push r21
     call stepnote
+    pop r21
     sts 0x3dd9,r18
 PAe:
+    mov r24,r21
+    MONITOR_STEP_HOOK
     jmp PSend
 
 ; Lock-Taste (Firmware 0x5E20): im SEq-Spielmodus keine Anzeige-Verriegelung, sonst wie original umschalten
@@ -1990,15 +1899,12 @@ lock_indicator:
     call isseq
     tst r25
     breq LIstock
-    lds r24,0x3a57
-    ret
+    rjmp ctrl_active
 LIstock:
     lds r24,0x212f
     ret
 
-; ================================================================ Einstieg aller Poti-Bewegungen (Firmware 0x11E8)
-; Hier verzweigt die Firmware in Shift / Snap / Jump. Im SEq-Spielmodus übernehmen die Step-Potis und die
-; Potis 65/67/68 komplett: eigene Änderungserkennung, eigenes Snap, Shift = Mute. r24 = Poti-Modus (0 = Jump).
+; Read the stock pot mode at the early scanner hook (zero = Jump).
 seqpoti:
     tst r10
     breq SQ1
@@ -2010,14 +1916,22 @@ SQ1:
     pop r25
     tst r21
     brne SQ2
-SQorig:
+    push r25
+    call isedit
+    mov r21,r25
+    pop r25
+    tst r21
+    brne SQed
     jmp 0x11ec
+SQed:
+    lds r24,0x3a56
+    jmp PSed
 SQ2:
     lds r21,0x3a56
     cpi r21,68
-    brcc SQorig
-    lds r23,PATPICKUP
-    or r24,r23
+    brcs SQhistory
+    jmp 0x11ec
+SQhistory:
     sts SNAPF,r24
     ldi r26,lo8(RAWLAST)
     ldi r27,hi8(RAWLAST)
@@ -2093,10 +2007,6 @@ SG5:
     ldi r27,hi8(CT)
     rjmp SGstep
 SGa:
-    ldi r26,lo8(SWING)
-    ldi r27,hi8(SWING)
-    cpi r25,0x0a
-    breq SGcell
     ldi r26,lo8(ROOT)
     ldi r27,hi8(ROOT)
     cpi r25,0x08
@@ -2197,9 +2107,6 @@ Qa:
     ldi r25,13
     cpi r23,0x0f
     breq Qmul
-    ldi r25,0x07
-    cpi r23,0x0a
-    breq Qmul
     ldi r25,12
     cpi r23,0x08
     breq Qmul
@@ -2227,8 +2134,6 @@ rawcmp:
     breq RCorig
     cpi r24,68
     brcc RCorig
-    cpi r24,65
-    breq RCorig
     ldi r26,lo8(RAWLAST)
     ldi r27,hi8(RAWLAST)
     add r26,r24
@@ -2237,7 +2142,6 @@ rawcmp:
     lds r19,RAWVAL
     cp r18,r19
     breq RCorig
-    st x,r19
     ldi r25,0x00
     jmp 0x135e
 RCorig:
@@ -2574,12 +2478,8 @@ SDsw0:
     jmp SDswing
 SDpr0:
     cpi r24,0x04
-    brne SDmu0
-    jmp SDprob
-SDmu0:
-    cpi r24,0x0c
     brne SDcl0
-    jmp SDmute
+    jmp SDprob
 SDcl0:
     cpi r24,0x0f
     brne SDcl0a
@@ -2812,41 +2712,6 @@ SDpc:
     sts 0x2fe8,r24
     jmp dispcopy
 
-; Mute der Spur 0x3dd9: "on" / "OFF", Punkt = wartet auf Pattern-Ende
-SDmute:
-    lds r19,0x3dd9
-    ldi r26,lo8(MREQ)
-    ldi r27,hi8(MREQ)
-    add r26,r19
-    adc r27,r1
-    ld r18,x
-    ldi r26,lo8(MUTE)
-    ldi r27,hi8(MUTE)
-    add r26,r19
-    adc r27,r1
-    ld r20,x
-    ldi r21,0x00
-    cp r18,r20
-    breq SDm1
-    ldi r21,0x80
-SDm1:
-    ldi r24,0x5c
-    sts 0x2fe6,r24
-    tst r18
-    brne SDmoff
-    ldi r24,0x54
-    or r24,r21
-    sts 0x2fe7,r24
-    sts 0x2fe8,r1
-    sts 0x2fe9,r1
-    jmp dispcopy
-SDmoff:
-    ldi r24,0x71
-    sts 0x2fe7,r24
-    or r24,r21
-    sts 0x2fe8,r24
-    sts 0x2fe9,r1
-    jmp dispcopy
 
 ; Textpuffer 0x2FE6..0x2FE9 in den LED-Speicher ab 0x3BF9 umsetzen (wie Firmware bei 0x39B0)
 dispcopy:
@@ -2901,8 +2766,11 @@ encw:
 Eseq:
     lds r24,0x3bf8
     tst r24
-    breq Eret
+    brne Epressed
+    ret
+Epressed:
     sts 0x3bf8,r1
+    sts ENC_WINDOW,r1
     lds r24,SAVEPH
     cpi r24,1
     brcs Etempo
@@ -2949,6 +2817,7 @@ Eset:
     sts 0x0a37,r21
 Eskip:
     out 0x3f,r19
+    MONITOR_HEADER_HOOK
 Eshow:
     sts 0x3dd8,r1
     ldi r18,0xff
@@ -3011,6 +2880,21 @@ seqedit:
     breq SE0
     jmp 0x24e8
 SE0:
+    ; The stock loop only publishes 0x230e in play/setup. In Track Edit
+    ; read the encoder push from its ADC sample using the same threshold.
+    lds r19,0x2fa3
+    clr r18
+    sbrs r19,7
+    inc r18
+    lds r19,TEMPO_KEY
+    sts TEMPO_KEY,r18
+    tst r18
+    breq SEbuttons
+    tst r19
+    brne SEbuttons
+    ldi r18,9
+    sts EDPAR,r18
+SEbuttons:
     ldi r18,0x01
 SEb:
     ldi r26,0x0f
@@ -3063,6 +2947,14 @@ SEeditable:
     lds r25,0x213e
     lds r18,EDPAR
     lds r19,EDTRK
+    cpi r18,9
+    brne SEtrack
+    ldi r26,lo8(SWING)
+    ldi r27,hi8(SWING)
+    clr r20
+    ldi r21,6
+    rjmp SEchg
+SEtrack:
     cpi r18,0x01
     brne SEp2
     ldi r26,lo8(EDTRK)
@@ -3114,12 +3006,14 @@ SEchg:
     brcc SEret
     inc r22
     st x,r22
-    ret
+    rjmp SEnotify
 SEdn:
     cp r20,r22
     brcc SEret
     dec r22
     st x,r22
+SEnotify:
+    MONITOR_HEADER_HOOK
 SEret:
     ret
 
@@ -3145,6 +3039,12 @@ ERseq:
 
 edshow:
     lds r18,EDPAR
+    cpi r18,9
+    brne ESnormal
+    lds r24,SWING
+    sts 0x3dd9,r24
+    jmp SDswing
+ESnormal:
     lds r19,EDTRK
     cpi r18,0x01
     brne ES2
@@ -3783,16 +3683,11 @@ ELx:
     ret
 
 apply_settings:
-    ldi r26,lo8(MREQ)
-    ldi r27,hi8(MREQ)
-    ldi r30,lo8(MUTE)
-    ldi r31,hi8(MUTE)
-    ldi r19,0x04
-ELm:
-    ld r18,x+
-    st z+,r18
-    dec r19
-    brne ELm
+    ; The four legacy mute bytes remain reserved in the EEPROM format.
+    sts MREQ,r1
+    sts MREQ1,r1
+    sts MREQ2,r1
+    sts MREQ3,r1
     in r18,0x03
     subi r18,BPMMIN
     ldi r30,lo8(pertab)
@@ -3875,11 +3770,11 @@ def main(src, dst, enable_monitor=False):
         G4=RAM['G'] + 4, G8=RAM['G'] + 8, G12=RAM['G'] + 12,
         LN1=RAM['LN'] + 1, LN2=RAM['LN'] + 2, LN3=RAM['LN'] + 3,
         SPD=0x3E60, CHN=0x3E64, DIR=0x3E68, TSUB=0x3E6C, TPAR=0x3E70, PDIR=0x3E74, SCNT=0x3E78,
-        LOOP=0x3E7C, MUTE=0x3E80, MREQ=0x3E84, LCH=0x3E88, EDTRK=0x3E8C, EDPAR=0x3E8D,
+        LOOP=0x3E7C, MREQ=0x3E84, MREQ1=0x3E85, MREQ2=0x3E86, MREQ3=0x3E87, LCH=0x3E88, EDTRK=0x3E8C, EDPAR=0x3E8D,
         SPDDEF=SPD_DEFAULT, PROBDEF=PROB_DEFAULT, NPROB=NPROB,
         **{'T' + k: ', '.join(map(str, v)) for k, v in seqtables().items()},
         RAWVAL=0x3DF6, RAWLAST=0x3E10, POS=0x3DEE, TLEN=0x3DF2, TLEN1=0x3DF3, TLEN2=0x3DF4, TLEN3=0x3DF5,
-        SWING=0x3DED, POTSWING=64, SWDISP='50, 54, 58, 62, 67, 71, 75',
+        SWING=0x3DED, SWDISP='50, 54, 58, 62, 67, 71, 75',
         OCT=0x3DE9, OCT1=0x3DEA, OCT2=0x3DEB, OCT3=0x3DEC,
         POTSCALE=POT_SCALE, POTROOT=POT_ROOT, ROOT=0x3DE8, LENDEF=LEN_DEFAULT,
         OFF1=RAM['OFF'] + 1, OFF2=RAM['OFF'] + 2, OFF3=RAM['OFF'] + 3,
@@ -3910,6 +3805,12 @@ def main(src, dst, enable_monitor=False):
         'MONITOR_INIT_HOOK': 'call monitor_init' if enable_monitor else '',
         'MONITOR_TICK_HOOK': 'call monitor_tick' if enable_monitor else '',
         'MONITOR_RX_HOOK': 'call monitor_rx' if enable_monitor else '',
+        'MONITOR_STEP_HOOK': 'call monitor_queue_step' if enable_monitor else '',
+        'MONITOR_TRIM_HOOK': 'call monitor_queue_trim' if enable_monitor else '',
+        'MONITOR_HEADER_HOOK': 'call monitor_queue_header' if enable_monitor else '',
+        'MONITOR_CLEAR_HOOK': 'call monitor_queue_clear' if enable_monitor else '',
+        'MONITOR_PATTERN_HOOK': 'call monitor_resync' if enable_monitor else '',
+        'MONITOR_UNDO_HOOK': 'call monitor_undo' if enable_monitor else '',
     })
     if enable_monitor:
         consts.update(monitor.constants(consts))
