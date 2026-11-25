@@ -138,6 +138,7 @@ older storage format are carried over.
 
 ## Hardware notes
 
+- The stock USB SysEx update path has a verified working budget of **64 KiB**. See the [PC44 flash test results](docs/flash-limits.md).
 - ATxmega128A4U, 32 MHz. Only GPIOR0..3 store values; GPIOR4..15 always read 0 on this chip.
 - The firmware uses EEPROM from `0x010` to `0x11F`. The save journal starts at `0x200`, A at `0x400`, and B at `0x600`. The old save layout remains readable until A is first saved in the new format.
 - The pot scanner averages eight ADC samples per pot, freeing SRAM for the inactive pattern. The patches retain the original pot scaling and the encoder switch sampling address.
