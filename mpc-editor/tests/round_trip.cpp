@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cassert>
 #include <chrono>
 #include <cstdint>
@@ -255,6 +256,33 @@ int main(int argc, char** argv)
     expect(plugin, Link, "PC44 USB connected");
     expect(plugin, Current, "Current 52");
 
+    // A value turned on the PC44 selects the same pattern, lane and step here.
+    plugin->setParameter(plugin, Slot, 0.0f);       // Follow
+    plugin->setParameter(plugin, StepField, 0.0f);  // Velocity lane
+    plugin->setParameter(plugin, Step, 0.0f);
+    block(0x32, 0, 40, 2);                          // A, pitch, track 3: complete row
+    noCommand();
+    expect(plugin, Slot, "Follow");                 // a first fill is not a change
+    block(0x32, 0, 41, 2);                          // step 1 of track 3 moved on the PC44
+    expect(plugin, Slot, "A");
+    expect(plugin, StepField, "Pitch");
+    expect(plugin, Step, "T3 / 1");
+    noCommand();                                    // following never sends anything
+
+    // A track setting changed on the PC44 selects it on the Setup page.
+    auto header = [](uint8_t slot, uint8_t track, uint8_t octave) {
+        std::array<uint8_t, 23> bytes{0xf0, 0x7d, 0x50, 0x34, 0x30,
+            static_cast<uint8_t>(track + slot * 4), 16, 4, 0, 0, octave, 0, 0, 0, 1, 9, 0, 1, 2, 0, 0, slot, 0xf7};
+        fake_emit(bytes.data(), bytes.size(), 24);
+    };
+    header(1, 1, 3);
+    header(1, 1, 4);                                // octave of track 2 in B
+    expect(plugin, Slot, "B");
+    expect(plugin, SetupField, "Octave");
+    waitFor([&] { return std::lround(plugin->getParameter(plugin, SetupTrack) * 3) == 1; });
+    assert(std::lround(plugin->getParameter(plugin, SetupTrack) * 3) == 1);
+    noCommand();
+
     float left[]{0.25f, 0.75f}, right[]{-0.125f, 0.5f}, outL[2]{}, outR[2]{};
     float* inputs[]{left, right};
     float* outputs[]{outL, outR};
@@ -263,5 +291,5 @@ int main(int argc, char** argv)
     assert(std::equal(std::begin(right), std::end(right), outR));
     plugin->dispatcher(plugin, effClose, 0, 0, nullptr, 0);
     dlclose(library);
-    std::puts("PC44 Editor USB, A/B acknowledgements, project recall and stereo passthrough passed.");
+    std::puts("PC44 Editor USB, A/B acknowledgements, project recall, following PC44 edits and stereo passthrough passed.");
 }

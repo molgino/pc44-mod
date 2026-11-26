@@ -1,13 +1,13 @@
 # PC44 Editor for MPC standalone
 
-PC44 Editor 0.7.1 is a stereo pass-through insert for the Faderfox PC44
+PC44 Editor 0.7.2 is a stereo pass-through insert for the Faderfox PC44
 sequencer. It connects directly to the PC44 over USB MIDI. It uses no plugin
 instrument track or MIDI Learn.
 
 ## Install on an MPC Live III
 
 1. Remove or replace the previous `NOXED - VST - PC44 Editor` folder in
-   `VST2 Plugins`. Copy the folder from the 0.7.1 ZIP into that same location.
+   `VST2 Plugins`. Copy the folder from the 0.7.2 ZIP into that same location.
 2. On MPC OS 3.10.1 or newer, enable **Enable Enhancements** and **External
    Plugin Support** in **Preferences → Enhancements (Beta)**.
 3. Flash the matched **PC44_seq_ab_one_hand.syx** to enable both pattern
@@ -27,6 +27,13 @@ new version. Open one instance per MPC.
 - In **Steps**, tap a lane and a step. The grid shows the lane's values.
   Amber indicates a sequenced step with a level bar, blue the playhead, and a white inner
   outline the step selected for editing.
+- Change something on the PC44 and the editor follows: it selects that
+  pattern, the lane (Velocity, Pitch, Chance, Gate, Ratchet, Chord, Nudge)
+  and the step you turned. A track setting (length, speed, direction, mode,
+  octave, channel), scale, root or a big pot selects the matching card on
+  the **Setup** page; switch to that page with the MPC's tab. Ctrl All keeps
+  the step column. Pattern copy, load and undo change several things at once
+  and are not followed. Following only selects; it never sends anything.
 - In **Setup**, choose a track and tap a setting card. See the current
   track, pattern, and global values in the cards.
 - Turn **Value** with its Q-Link (Q-Link 4) or the slider. The change is sent

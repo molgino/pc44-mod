@@ -37,7 +37,7 @@ mpc::PluginInfo editorInfo()
     mpc::PluginInfo info;
     info.name = "PC44 Editor";
     info.vendor = "NOXED";
-    info.version = 701;
+    info.version = 702;
     info.uniqueId = MPC_FOURCC('N', 'X', 'p', 'E');
     info.tailSamples = 1;
     return info;
@@ -330,6 +330,28 @@ private:
         return true;
     }
 
+    // Select what was just changed on the PC44: pattern, lane and step, or the
+    // track setting on the Setup page. Selection parameters only; nothing is sent.
+    void follow(const Monitor::Touch& touch)
+    {
+        auto move = [this](int index, int value) {
+            if (getInt(index) == value) return;
+            set(index, static_cast<float>(value));
+            notifyHostParameterChanged(index);
+        };
+        if (touch.slot >= 0) move(Slot, touch.slot + 1);
+        if (touch.field < StepFields) {
+            move(StepField, touch.field);
+            const int current = getInt(Step);
+            // Several steps (Ctrl All): stay on the column, but on the touched track.
+            move(Step, touch.track * Steps + (touch.step >= 0 ? touch.step : current % Steps));
+        } else {
+            move(SetupField, touch.field == Trim ? SetupChoices - 1 : touch.field - StepFields);
+            if (touch.field < Scale || touch.field == Trim) move(SetupTrack, touch.track);
+        }
+        redraw_.store(true);
+    }
+
     void releaseConfirmedDraft(const Edit& edit)
     {
         const bool setup = edit.field >= StepFields;
@@ -505,6 +527,11 @@ private:
                 case AlsaMidi::State::ReadOnly: link = fresh ? ViewOnly : NoTelemetry; break;
                 case AlsaMidi::State::Duplex: link = fresh ? Live : NoTelemetry; break;
             }
+            // Follow edits made on the PC44 itself, but never while a plugin edit is in flight.
+            if (const auto touch = monitor.takeTouch();
+                touch && !pending && (link == Live || link == ViewOnly))
+                follow(*touch);
+
             if (pending && now >= deadline) {
                 pending.reset();
                 request_.store(0);

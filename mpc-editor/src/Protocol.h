@@ -5,6 +5,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 
 namespace pc44 {
 
@@ -98,6 +99,21 @@ struct Monitor {
     bool hasHeads = false;
     bool extended = false;
 
+    // A change made on the PC44 itself: which value moved where. The editor
+    // follows it so the panel shows what the player is touching.
+    struct Touch { int slot; int field; int track; int step; };  // step -1: several
+
+    // Returns the PC44-side change since the last call, if it was a single
+    // kind of change. Pattern copies, loads and undo touch several fields at
+    // once and are not followed.
+    std::optional<Touch> takeTouch()
+    {
+        auto result = touchMixed_ ? std::nullopt : touch_;
+        touch_.reset();
+        touchMixed_ = false;
+        return result;
+    }
+
     bool running() const { return transport >= 0 && (transport & 1); }
 
     int value(int slot, int field, int index) const
@@ -152,6 +168,9 @@ struct Monitor {
         }
         if (command == 0x38 && size == 10) {
             extended = true;
+            // A big pot (velocity trim) is a track setting shared by A and B.
+            for (int t = 0; t < Tracks; ++t)
+                if (trims[t] >= 0 && trims[t] != frame[5 + t]) noteTouch({-1, Trim, t, -1});
             std::copy_n(frame + 5, Tracks, trims.begin());
             return Result::Telemetry;
         }
@@ -168,6 +187,9 @@ struct Monitor {
     }
 
 private:
+    std::optional<Touch> touch_;
+    bool touchMixed_ = false;
+
     void setActive(int slot)
     {
         if (active == slot) return;
@@ -178,9 +200,33 @@ private:
         hasHeads = false;
     }
 
+    void noteTouch(Touch touch)
+    {
+        if (!touch_) { touch_ = touch; return; }
+        if (touch_->slot != touch.slot || touch_->field != touch.field) { touchMixed_ = true; return; }
+        if (touch_->track != touch.track || touch_->step != touch.step) touch_->step = -1;
+    }
+
     void updateBlock(int slot, int track, int block, const uint8_t* data)
     {
-        patterns[slot][track].update(block, data);
+        auto& row = patterns[slot][track];
+        // Only compare against complete data for A or B; a first fill is not a change.
+        if (slot < 2 && row.has(block)) {
+            if (block > 0) {
+                int changed = 0, step = -1;
+                for (int i = 0; i < Steps; ++i)
+                    if (row.data[block][i] != data[i]) { ++changed; step = i; }
+                if (changed) noteTouch({slot, block - 1, track, changed == 1 ? step : -1});
+            } else {
+                // Per-track settings (bytes 0-5) and the slot tuning (8, 9).
+                // Tempo, swing and panel state change during play and are not followed.
+                for (int i = 0; i < 6; ++i)
+                    if (row.data[0][i] != data[i]) noteTouch({slot, TrackLength + i, track, -1});
+                if (row.data[0][8] != data[8]) noteTouch({slot, Scale, track, -1});
+                if (row.data[0][9] != data[9]) noteTouch({slot, Root, track, -1});
+            }
+        }
+        row.update(block, data);
         if (block != 0) return;
         for (auto& row : patterns[slot]) {
             row.set(0, 8, data[8]);  // scale and root belong to the entire slot
