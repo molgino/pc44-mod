@@ -24,8 +24,14 @@ def dump(name, content):
     (OUT / name).write_text(json.dumps(content, ensure_ascii=False, indent=2) + "\n")
 
 
+FONT_FILE = Path(__file__).resolve().parent / "fonts" / "TitilliumWeb-SemiBold.ttf"
+
+
 def font(size):
-    return ImageFont.truetype("DejaVuSans-Bold.ttf", size)
+    # Button captions are baked into the images: the MPC draws button images
+    # above labels, so a label over a button is hidden. Titillium Web matches
+    # the font the MPC uses for every other text.
+    return ImageFont.truetype(str(FONT_FILE), size)
 
 
 def rounded(draw, xy, color, outline=None, width=1, radius=8):
@@ -105,8 +111,8 @@ def button_asset(file, word, w, h, on, primary=False):
     stroke = "#ffbe70" if on else "#303847"
     color = "#18110b" if primary else ("#ffd298" if on else "#e0e7f1")
     rounded(draw, (0, 0, w - 1, h - 1), fill, stroke, width=2 if on else 1, radius=7)
-    if word and primary:
-        draw.text((w / 2, h / 2), word, font=font(18), fill=color, anchor="mm")
+    if word:
+        draw.text((w / 2, h / 2), word, font=font(20), fill=color, anchor="mm")
     img.save(OUT / file)
 
 
@@ -130,7 +136,9 @@ def label(name, xy, size, colour=TEXT, param=None, centre=False, bold=False):
     data = {"version": 1, "textStyle": style(size, colour,
             "horizontallyCentred" if centre else "left", "SemiBold" if bold else "Regular"),
             "type": "Text" if param is None else "Value",
-            "handleName": "Invalid" if param is None else "Data"}
+            # Fixed text uses the "Data" handle like the SDK's own generator.
+            # With "Invalid" the MPC Live III drew no fixed text at all.
+            "handleName": "Data"}
     if param is None:
         data["text"] = name
     return widget(name, "Label", data, xy, param)
@@ -147,8 +155,6 @@ def picker(parts, name, words, xy, stride, param):
     for i, word in enumerate(words):
         parts.append(button(word, (x + stride * i, y, width, height), param,
                             f"{name}_{i}_1.png", f"{name}_{i}_0.png", len(words), i))
-        parts.append(label(word, (x + stride * i, y, width, height), 19, TEXT,
-                           centre=True, bold=True))
 
 
 def common():

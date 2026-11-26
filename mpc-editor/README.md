@@ -1,13 +1,13 @@
 # PC44 Editor for MPC standalone
 
-PC44 Editor 0.7.0 is a stereo pass-through insert for the Faderfox PC44
+PC44 Editor 0.7.1 is a stereo pass-through insert for the Faderfox PC44
 sequencer. It connects directly to the PC44 over USB MIDI. It uses no plugin
 instrument track or MIDI Learn.
 
 ## Install on an MPC Live III
 
 1. Remove or replace the previous `NOXED - VST - PC44 Editor` folder in
-   `VST2 Plugins`. Copy the folder from the 0.7.0 ZIP into that same location.
+   `VST2 Plugins`. Copy the folder from the 0.7.1 ZIP into that same location.
 2. On MPC OS 3.10.1 or newer, enable **Enable Enhancements** and **External
    Plugin Support** in **Preferences → Enhancements (Beta)**.
 3. Flash the matched **PC44_seq_ab_one_hand.syx** to enable both pattern
@@ -61,7 +61,7 @@ both slots live and edit every setting.
 
 Use the [MPC Plugin Builder SDK](https://github.com/inmusic-software/mpc-plugin-builder-sdk)
 and Zig 0.15.2. On Linux, install the ALSA development headers (on Debian,
-`libasound2-dev`), Pillow and DejaVu Sans. Set `MPC_SDK` to the SDK checkout.
+`libasound2-dev`), and Pillow (Titillium Web is bundled in `fonts/`, SIL OFL). Set `MPC_SDK` to the SDK checkout.
 If the ALSA headers are outside the compiler's search path, set
 `CPLUS_INCLUDE_PATH` to the directory that contains `alsa/asoundlib.h`.
 

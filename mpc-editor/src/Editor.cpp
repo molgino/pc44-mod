@@ -37,7 +37,7 @@ mpc::PluginInfo editorInfo()
     mpc::PluginInfo info;
     info.name = "PC44 Editor";
     info.vendor = "NOXED";
-    info.version = 700;
+    info.version = 701;
     info.uniqueId = MPC_FOURCC('N', 'X', 'p', 'E');
     info.tailSamples = 1;
     return info;
