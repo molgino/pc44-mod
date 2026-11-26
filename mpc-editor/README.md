@@ -1,13 +1,13 @@
 # PC44 Editor for MPC standalone
 
-PC44 Editor 0.6.0 is a stereo pass-through insert for the Faderfox PC44
+PC44 Editor 0.7.0 is a stereo pass-through insert for the Faderfox PC44
 sequencer. It connects directly to the PC44 over USB MIDI. It uses no plugin
 instrument track or MIDI Learn.
 
 ## Install on an MPC Live III
 
 1. Remove or replace the previous `NOXED - VST - PC44 Editor` folder in
-   `VST2 Plugins`. Copy the folder from the 0.6.0 ZIP into that same location.
+   `VST2 Plugins`. Copy the folder from the 0.7.0 ZIP into that same location.
 2. On MPC OS 3.10.1 or newer, enable **Enable Enhancements** and **External
    Plugin Support** in **Preferences → Enhancements (Beta)**.
 3. Flash the matched **PC44_seq_ab_one_hand.syx** to enable both pattern
@@ -25,12 +25,14 @@ new version. Open one instance per MPC.
   streams both slots, including while stopped. The transport and blue
   playheads follow the PC44's playing slot. **Follow** is the playback view.
 - In **Steps**, tap a lane and a step. The grid shows the lane's values.
-  Amber indicates a sequenced step, blue the playhead, and a white inner
+  Amber indicates a sequenced step with a level bar, blue the playhead, and a white inner
   outline the step selected for editing.
 - In **Setup**, choose a track and tap a setting card. See the current
   track, pattern, and global values in the cards.
-- Adjust **New Value** with the slider or its Q-Link and tap **Apply**.
-  **Applied on PC44** indicates confirmation of the exact write. Physical
+- Turn **Value** with its Q-Link (Q-Link 4) or the slider. The change is sent
+  to the PC44 at once, no Apply needed. **Applied on PC44** confirms the exact
+  write. Q-Links 1-4 are the same on both pages: Pattern, Lane or Setting,
+  Step or Track, Value. Physical
   knob changes get their own update ahead of the background sweep. Velocity
   zero switches a step off.
 - To save B, use **Shift + 2** on the PC44 to select B for editing, then

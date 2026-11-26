@@ -13,7 +13,7 @@ PANEL = "#171a22"
 BORDER = "#2a2f3b"
 TEXT = "fff4f3ee"
 MUTED = "ffadbacb"
-BLUE = "ffa7d9ff"
+BLUE = "ffa7d9ff"  # playhead only
 AMBER = "ffffbe70"
 STEP_FIELDS = ("Velocity", "Pitch", "Chance", "Gate", "Ratchet", "Chord", "Nudge")
 SETTINGS = ("Steps", "Speed", "Direction", "Mode", "Octave", "MIDI Channel",
@@ -59,16 +59,20 @@ def assets():
 
     # The MPC scales each frame to the step bounds. Keep the source small
     # enough for a 2D texture while using exact per-cell VST value text.
-    side, group_size = 14, 129
+    side, group_size = 24, 129
     strip = Image.new("RGB", (side, side * group_size * 4))
     draw = ImageDraw.Draw(strip)
     for state in range(4):
-        fill = ("#252c3a", "#654826", "#25455d", "#44647b")[state]
-        edge = ("#303848", "#b38551", "#a7d9ff", "#a7d9ff")[state]
+        fill = ("#222836", "#2b2a2c", "#1f3a50", "#2d5470")[state]
+        bar = ("#2c3446", "#c98a45", "#5ea8d8", "#a7d9ff")[state]
+        edge = ("#303848", "#6b4f2c", "#a7d9ff", "#a7d9ff")[state]
         for i in range(group_size):
             y = (state * group_size + i) * side
             draw.rectangle((0, y, side - 1, y + side - 1), fill=edge)
             draw.rectangle((1, y + 1, side - 2, y + side - 2), fill=fill)
+            height = round((side - 4) * min(i, 127) / 127)
+            if state != 0 and height:
+                draw.rectangle((2, y + side - 2 - height, side - 3, y + side - 3), fill=bar)
     strip.save(OUT / "cell_strip.png")
 
     select = Image.new("RGBA", (PAD_W, PAD_H))
@@ -92,7 +96,6 @@ def assets():
         rounded(ImageDraw.Draw(on), (0, 0, dims[0] - 1, dims[1] - 1), None,
                 "#ffbe70", width=2, radius=7)
         on.save(OUT / f"{name}_1.png")
-    button_asset("commit.png", "APPLY", 123, 49, True, primary=True)
 
 
 def button_asset(file, word, w, h, on, primary=False):
@@ -102,7 +105,7 @@ def button_asset(file, word, w, h, on, primary=False):
     stroke = "#ffbe70" if on else "#303847"
     color = "#18110b" if primary else ("#ffd298" if on else "#e0e7f1")
     rounded(draw, (0, 0, w - 1, h - 1), fill, stroke, width=2 if on else 1, radius=7)
-    if word:
+    if word and primary:
         draw.text((w / 2, h / 2), word, font=font(18), fill=color, anchor="mm")
     img.save(OUT / file)
 
@@ -144,6 +147,8 @@ def picker(parts, name, words, xy, stride, param):
     for i, word in enumerate(words):
         parts.append(button(word, (x + stride * i, y, width, height), param,
                             f"{name}_{i}_1.png", f"{name}_{i}_0.png", len(words), i))
+        parts.append(label(word, (x + stride * i, y, width, height), 19, TEXT,
+                           centre=True, bold=True))
 
 
 def common():
@@ -154,7 +159,7 @@ def common():
         label("Pattern", (619, 20, 94, 34), 19, MUTED, bold=True),
         label("View", (40, 98, 170, 36), 23, AMBER, param=12, bold=True),
         label("Grid status", (219, 98, 438, 36), 22, MUTED, param=13),
-        label("PLAYBACK", (1046, 109, 187, 29), 16, BLUE, bold=True),
+        label("PLAYBACK", (1046, 109, 187, 29), 16, MUTED, bold=True),
         label("Transport", (1046, 139, 195, 32), 19, param=6, bold=True),
         label("Tempo", (1046, 171, 191, 35), 24, param=8),
         label("PC44 focus", (1046, 206, 190, 25), 17, MUTED, param=11),
@@ -171,17 +176,16 @@ def common():
 def editor(parts, setup=False):
     value, stored, apply = (87, 91, 88) if setup else (3, 89, 4)
     parts += [
-        label("Receipt", (40, 547, 288, 34), 17, BLUE, param=10),
+        label("Receipt", (40, 547, 288, 34), 17, MUTED, param=10),
         label("STORED", (339, 522, 108, 25), 15, MUTED, bold=True),
         label("Stored value", (339, 551, 138, 35), 23, param=stored, bold=True),
-        label("NEW VALUE", (490, 522, 115, 25), 15, AMBER, bold=True),
-        label("New value", (604, 520, 205, 28), 22, param=value, bold=True),
+        label("VALUE (LIVE)", (490, 522, 140, 25), 15, AMBER, bold=True),
+        label("New value", (640, 520, 205, 28), 22, param=value, bold=True),
         widget("Adjust new value", "Slider",
                {"version": 2, "sliderType": "ColourBar", "direction": "Horizontal",
                 "backgroundColour": "ff2a3141", "outlineColour": "ff3b4355",
                 "valueColour": "ffcf9459", "isBipolar": False, "handleName": "Data"},
-               (489, 558, 338, 26), value, True),
-        button("Apply to PC44", (867, 535, 123, 49), apply, "commit.png", "commit.png", focus=False),
+               (489, 558, 500, 26), value, True),
     ]
 
 
@@ -212,7 +216,7 @@ def steps_page():
                        64, cell, focus=False),
             ]
     parts += [
-        label("SELECTED STEP", (1046, 331, 190, 25), 16, BLUE, bold=True),
+        label("SELECTED STEP", (1046, 331, 190, 25), 16, MUTED, bold=True),
         label("Step address", (1046, 357, 190, 31), 25, param=2, bold=True),
         label("Pitch and chance", (1046, 397, 190, 25), 21, param=14),
         label("Gate ratchet nudge", (1046, 430, 190, 25), 19, MUTED, param=15),
@@ -235,7 +239,7 @@ def setup_page():
     picker(parts, "track", ("Track 1", "Track 2", "Track 3", "Track 4"),
            (580, 135, 95, 42), 101, 86)
     for title, x in (("TRACK SETTINGS", 56), ("PATTERN", 498), ("GLOBAL", 695)):
-        parts.append(label(title, (x, 186, 178, 27), 17, BLUE, bold=True))
+        parts.append(label(title, (x, 186, 178, 27), 17, AMBER, bold=True))
     for i, title in enumerate(SETTINGS):
         group, x, y, w = setting_rect(i)
         parts += [
@@ -258,8 +262,8 @@ def render():
     info = {"version": 1, "type": "CompleteDescription"}
     tabs, assignments = [], []
     for index, (name, panel, components, control_ids) in enumerate((
-        ("STEPS", "steps", steps_page(), (3, 2, 1, 84)),
-        ("SETUP", "setup", setup_page(), (87, 85, 86, 1)),
+        ("STEPS", "steps", steps_page(), (1, 84, 2, 3)),
+        ("SETUP", "setup", setup_page(), (1, 85, 86, 87)),
     )):
         backdrop = {"version": 1, "colour": "ff0e1015", "image": f"{panel}_panel.png"}
         root = {"version": 2, "actions": [], "backgroundData":
@@ -267,8 +271,8 @@ def render():
                 "ignoreMousePresses": False, "disableCoarseDataWheel": True,
                 "componentsData": components}
         tabs.append({"version": 1, "tabName": name, "fnKeyIndex": index, "fnKeySubIndex": 0,
-                     "componentDefinition": root, "qlinkBoundsData": []})
-        mapped = dict(zip((13, 9, 5, 1), control_ids))
+                     "componentDefinition": root, "qlinkBoundsData": ["32 90 965 504"]})
+        mapped = dict(zip((1, 2, 3, 4), control_ids))
         assignments.append({"Tab": index + 1, "SubTab": 1, "Bank Direction": "Column",
                             "Q-Links": {f"Q-Link {i}": mapped.get(i, -1) for i in range(1, 17)}})
     choices = {1: ["Follow", "A", "B"],

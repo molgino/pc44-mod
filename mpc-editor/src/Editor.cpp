@@ -37,7 +37,7 @@ mpc::PluginInfo editorInfo()
     mpc::PluginInfo info;
     info.name = "PC44 Editor";
     info.vendor = "NOXED";
-    info.version = 600;
+    info.version = 700;
     info.uniqueId = MPC_FOURCC('N', 'X', 'p', 'E');
     info.tailSamples = 1;
     return info;
@@ -62,11 +62,11 @@ public:
         add(mpc::intParam("tempo", "Tempo", 0, 16383, 0));
         add(mpc::intParam("current", "Current Velocity", 0, 128, 0));
         add(mpc::choiceParam("receipt", "Edit Status", {
-            "Tap Apply to send", "Waiting for PC44 confirmation",
+            "Live: turn a value to edit", "Waiting for PC44 confirmation",
             "Applied on PC44", "PC44 is saving. Try again.", "PC44 rejected the edit",
             "No reply. Use Monitor firmware", "PC44 connection lost",
             "Choose pattern A or B", "Could not send to PC44",
-            "Install matched PC44 firmware", "Set a new value, then Apply"
+            "Install matched PC44 firmware", "Move the value to edit"
         }));
         add(mpc::intParam("focus", "PC44 Controls", 0, 256, 0));
         add(mpc::intParam("edit_slot", "Target Pattern", 0, 4, 0));
@@ -131,15 +131,26 @@ public:
     {
         if (index == Slot || index == Step || index == StepField) invalidateControl(false);
         if (index == Slot || index == SetupTrack || index == SetupField) invalidateControl(true);
-        if (!restoring && index == Velocity) dirty_[0].store(true);
-        if (!restoring && index == SetupValue) dirty_[1].store(true);
+        // Live edit: a user change of the value control is sent right away.
+        // The worker thread resends if the value moved while a send was in flight.
+        if (!restoring && (index == Velocity || index == SetupValue)) {
+            const bool setup = index == SetupValue;
+            dirty_[setup].store(true);
+            if (writable_.load()) queueEdit(setup);
+            return;
+        }
         if (index != Apply && index != SetupApply) return;
 
+        // Apply stays as an optional manual resend.
         const bool setup = index == SetupApply;
         const bool pressed = value >= 0.5f;
         const bool edge = applyState_[setup].exchange(pressed) != pressed;
         if (restoring || !edge || !writable_.load()) return;
+        queueEdit(setup);
+    }
 
+    void queueEdit(bool setup)
+    {
         const auto target = selection(setup);
         const int slot = getInt(Slot);
         const int encoded = target.key(slot);
@@ -149,7 +160,7 @@ public:
         const int amount = amountValue(target.field, getNormalised(setup ? SetupValue : Velocity));
         const int request = (1 + encoded + amount) | (ready ? 0 : MissingAmount);
         int idle = 0;
-        request_.compare_exchange_strong(idle, request);
+        if (request_.compare_exchange_strong(idle, request)) sentAmount_[setup].store(ready ? amount : -1);
     }
 
     bool formatValue(int index, float value, std::string& out) override
@@ -238,6 +249,7 @@ public:
         for (int page = 0; page < 2; ++page) {
             dirty_[page].store(false);
             ready_[page].store(-1);
+            sentAmount_[page].store(-1);
         }
     }
 
@@ -296,6 +308,7 @@ private:
         if (selectionKey_[setup].exchange(key) != key) {
             dirty_[setup].store(false);
             ready_[setup].store(-1);
+            sentAmount_[setup].store(-1);
             redraw_.store(true);
         }
     }
@@ -527,6 +540,16 @@ private:
                 if (!pending) request_.store(0);
             }
             writable_.store(link == Live && !pending);
+            if (link == Live && !pending && request_.load() == 0) {
+                // Value changed while an edit was in flight: send the newest one once.
+                for (int page = 0; page < 2; ++page) {
+                    if (!dirty_[page].load()) continue;
+                    const auto target = selection(page);
+                    const int amount = amountValue(target.field,
+                        getNormalised(page ? SetupValue : Velocity));
+                    if (amount != sentAmount_[page].load()) { queueEdit(page); break; }
+                }
+            }
 
             const bool selectionChanged = redraw_.exchange(false);
             if (selectionChanged || now >= nextUI || getInt(Receipt) != receipt) {
@@ -544,6 +567,7 @@ private:
     std::atomic<bool> writable_{false};
     std::atomic<bool> applyState_[2]{};
     std::atomic<bool> dirty_[2]{};
+    std::atomic<int> sentAmount_[2]{{-1}, {-1}};
     std::atomic<int> ready_[2]{{-1}, {-1}};
     std::atomic<int> selectionKey_[2]{{0}, {StepFields << 14}};
     ControlState controls_[2]{};
