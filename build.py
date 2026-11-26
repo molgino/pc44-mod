@@ -18,6 +18,7 @@ Spielmodus (Start direkt in "SEq"):
   Grosse Potis:           Velocity-Trim der Spuren 1–4; bei null verstummt die Spur
   Shift + Poti 65/66:     Grundton / Skala des Edit-Patterns
   Encoder:                Tempo 30..250 BPM ("t120"), doppelter Druck wechselt A/B
+                          Druck zeigt das Tempo ("t120", mit externer Clock "E120"), sendet im SEq keinen CC
 Edit-Seite (Shift + Edit im SEq-Modus):
   Poti einer Spur bewegen = Spur wählen;  Taste 1..6 = Parameter wählen, Encoder = Wert
   1 Spur "tr 1"   2 Länge "LP16"   3 Oktave "oc 0"   4 Speed "1-8".."2-1"   5 Kanal "Ch01"   6 Richtung "For/rEu/PinG/rnd"
@@ -173,6 +174,7 @@ PATCHES = [
     (0x30E0, '80 e5 80 93', 'jmp rdisp'),
     (0x1F78, '80 91 f8 3b', 'jmp encw'),
     (0x2DE4, '20 91 56 3a', 'call loopend'),
+    (0x2A84, '30 81 33 23', 'call pushkey'),
     (0x135E, '60 91 84 22', 'jmp potisend'),
     (0x3C2C, '20 91 e3 2f', 'jmp rendhook'),
     (0x3BF8, 'f0 92 a8 31', 'jmp ledhook'),
@@ -2837,6 +2839,25 @@ loopend:
     brne LEret
     ldi r18,0x08
 LEret:
+    ret
+
+; Tasten-Schleife, Taste 0 ist der Encoder-Druck. Im SEq-Spielmodus ist er die
+; Tempo-/A-B-Taste (gelesen über 0x230e) und darf seinen Setup-CC nicht senden
+; (Werkseinstellung CC70 auf Kanal 6). loopend überspringt nur die Tasten 1-8,
+; und erst nach Taste 0. Ersetzt "ld r19,z; and r19,r19": Z bleibt für brne gesetzt.
+pushkey:
+    ld r19,z
+    tst r18
+    brne ENCPKret
+    push r25
+    call isseq
+    tst r25
+    pop r25
+    breq ENCPKret
+    st z,r1
+    clr r19
+ENCPKret:
+    and r19,r19
     ret
 
 ; r25 = 1, wenn SEq aktiv ist und weder Setup- noch Edit-Mode läuft (verändert nur r25)

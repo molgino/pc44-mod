@@ -37,7 +37,7 @@ Hold **Shift** and press a numbered key in the sequencer play screen.
 | 5 | Save the slot you are editing, along with the shared tempo and swing settings. Wait for `SAVE` to clear before switching the unit off. |
 | 6 | Revert the most recent **Ctrl All** gesture with its original slot selected for editing. |
 
-Double-press the encoder in the play view to switch playback between A and B with one hand. Make both presses within about 400 ms. While playing, the switch waits for the next bar. Double-press again before the boundary to cancel. While stopped, it switches immediately. A single press shows the tempo.
+Double-press the encoder in the play view to switch playback between A and B with one hand. Make both presses within about 400 ms. While playing, the switch waits for the next bar. Double-press again before the boundary to cancel. While stopped, it switches immediately. A single press shows the tempo: `t120` for the internal clock, `E120` for the measured tempo of an incoming MIDI clock. In the play view the push sends no MIDI; outside SEq it keeps the CC from the Faderfox setup (factory default CC70 on channel 6).
 
 Start a groove in A with key **7**. Use **Shift + 4** to copy it to B, then turn the step pots to make a variation. Double-press the encoder to launch B. Key **8** stops playback.
 

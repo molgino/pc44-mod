@@ -199,6 +199,38 @@ def run_suite(flash, labels):
     panel()
     assert m.mem[0x220e] == 0 and m.mem[0x3c02] == 0
 
+    # The encoder push is the tempo / A-B key in SEq. The stock button loop
+    # must not also handle it as key 0 and send its setup CC (Faderfox
+    # default: CC70 on channel 6). Give the stock tables that assignment.
+    m.mem[0x2135] = 0xB5
+    m.mem[0x3198] = 70
+    events.clear()
+    handled = []
+    stock_exec = m.exec
+    def watch(pc, length, text):
+        if pc == 0x2a8c:  # stock button loop: body for a pressed key
+            handled.append(m.mem[0x3a56])
+        return stock_exec(pc, length, text)
+    m.exec = watch
+    panel(encoder=True)
+    del m.exec
+    assert not handled, handled
+    assert m.mem[0x220f] == 0
+    assert not events, ['%02X %02X %02X' % e for e in events]
+    assert m.mem[0x3dd4] == build.HOLD  # the push still shows the tempo
+    m.exec = watch
+    panel()                             # release: no CC either
+    del m.exec
+    assert not handled and not events, (handled, events)
+    # Outside SEq the push keeps its stock press and release messages.
+    m.mem[0x2218] = 3
+    m.exec = watch
+    panel(encoder=True)
+    panel()
+    del m.exec
+    m.mem[0x2218] = 8
+    assert handled == [0, 0], handled
+
     panel(encoder=True)
     assert m.mem[0x3dd4] == build.HOLD
     m.mem[0x3dd4] = 1
