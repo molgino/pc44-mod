@@ -2,9 +2,11 @@
 #include "mpc_plugin.h"
 #include "AlsaMidi.h"
 #include "FieldText.h"
+#include "PatternMemory.h"
 
 #include <atomic>
 #include <chrono>
+#include <mutex>
 #include <optional>
 #include <thread>
 
@@ -19,13 +21,18 @@ enum Parameter {
     Current, Receipt, Focus, EditSlot, Background, Details, Timing, Track1, Track2,
     Track3, Track4, Grid,
     StepField = Grid + Cells, SetupField, SetupTrack, SetupValue, SetupApply,
-    StepStored, EditPitchContext, SetupStored, SetupValues
+    StepStored, EditPitchContext, SetupStored, SetupValues,
+    // Pattern memory, appended so existing parameter indices never move.
+    StoreA = SetupValues + SetupFields, StoreB, LoadA, LoadB, MemoryContent, MemoryStatus
 };
 
 enum LinkState { Connecting, NoAlsa, NoPC44, TwoPC44s, NoTelemetry, ViewOnly, Live, SecondInsert };
 enum ReceiptState { NoEdit, Sending, Applied, SaveBusy, Rejected, NoReply, Disconnected, InvalidTarget, SendFailed,
                     NeedsNewFirmware, SetValue };
 enum GridState { Awaiting, CurrentPattern, CachedPattern, EmptyCache, ReadingBoth, InactiveReady };
+
+enum MemoryState { MemIdle, MemStored, MemNotRead, MemEmpty, MemNotConnected, MemNeedsFirmware,
+                   MemLoading, MemLoaded, MemLoadedErrors, MemNoReply, MemLost, MemBusy, MemCancelled };
 
 constexpr int InFlight = -1;
 
@@ -37,7 +44,7 @@ mpc::PluginInfo editorInfo()
     mpc::PluginInfo info;
     info.name = "PC44 Editor";
     info.vendor = "NOXED";
-    info.version = 702;
+    info.version = 800;
     info.uniqueId = MPC_FOURCC('N', 'X', 'p', 'E');
     info.tailSamples = 1;
     return info;
@@ -102,6 +109,12 @@ public:
             const auto id = "setting_" + std::to_string(field);
             add(mpc::intParam(id.c_str(), FieldNames[field], 0, 251, 0));
         }
+        add(mpc::boolParam("memory_store_a", "Store A", false));
+        add(mpc::boolParam("memory_store_b", "Store B", false));
+        add(mpc::boolParam("memory_load_a", "Load to A", false));
+        add(mpc::boolParam("memory_load_b", "Load to B", false));
+        add(mpc::intParam("memory", "Pattern Memory", 0, 1023, 0));
+        add(mpc::intParam("memory_status", "Memory Status", 0, 16383, 0));
     }
 
     ~Editor() override
@@ -129,6 +142,13 @@ public:
 
     void parameterChanged(int index, float value) override
     {
+        if (index >= StoreA && index <= LoadB) {
+            // Like Apply, every tap flips the value. Restored values are not taps.
+            const bool pressed = value >= 0.5f;
+            const bool edge = memoryButtons_[index - StoreA].exchange(pressed) != pressed;
+            if (!restoring && edge) memoryAction_.store(index - StoreA + 1);
+            return;
+        }
         if (index == Slot || index == Step || index == StepField) invalidateControl(false);
         if (index == Slot || index == SetupTrack || index == SetupField) invalidateControl(true);
         // Live edit: a user change of the value control is sent right away.
@@ -228,6 +248,18 @@ public:
             case Track1: case Track2: case Track3: case Track4:
                 out = trackText(n);
                 return true;
+            case MemoryContent:
+                if (!n) out = "Empty";
+                else {
+                    const int packed = n - 1;
+                    const int scale = (packed >> 1) & 15, root = (packed >> 5) & 15;
+                    out = slotName(packed & 1) + ": " + (root < 12 ? NoteNames[root] : "?") + " " +
+                          (scale < 11 ? Scales[scale] : "?");
+                }
+                return true;
+            case MemoryStatus:
+                out = memoryText(n);
+                return true;
         }
         if (index >= Grid && index < Grid + Cells) {
             const int cellValue = n % 129 - 1;
@@ -253,7 +285,60 @@ public:
         }
     }
 
+    // The stored pattern travels with the MPC project and with user presets.
+    void saveExtraState(std::vector<uint8_t>& out) override
+    {
+        std::lock_guard<std::mutex> lock(memoryMutex_);
+        if (memory_) memory_->serialize(out);
+    }
+
+    void loadExtraState(const uint8_t* data, size_t size) override
+    {
+        auto image = PatternImage::parse(data, size);
+        std::lock_guard<std::mutex> lock(memoryMutex_);
+        memory_ = image;
+        redraw_.store(true);
+    }
+
+    // A project or preset load replaces the memory (presets without one leave
+    // it empty) and stops a load to the PC44 that is still running.
+    void beforeStateLoad()
+    {
+        abortLoad_.store(true);
+        memoryStatus_.store(0);
+        std::lock_guard<std::mutex> lock(memoryMutex_);
+        memory_.reset();
+        redraw_.store(true);
+    }
+
 private:
+    static int memoryCode(MemoryState state, int slot = 0, int number = 0)
+    {
+        return (state << 10) | ((slot & 1) << 9) | std::clamp(number, 0, 511);
+    }
+
+    static std::string memoryText(int value)
+    {
+        const int number = value & 511;
+        const std::string slot = slotName((value >> 9) & 1);
+        switch (value >> 10) {
+            case MemStored: return "Stored from " + slot;
+            case MemNotRead: return slot + " not read yet";
+            case MemEmpty: return "Nothing stored";
+            case MemNotConnected: return "Connect the PC44";
+            case MemNeedsFirmware: return "Needs matched firmware";
+            case MemLoading: return "Loading to " + slot + "  " + std::to_string(number) + "%";
+            case MemLoaded: return number ? "Loaded to " + slot + ": " + std::to_string(number) + " changed"
+                                          : slot + " already matches";
+            case MemLoadedErrors: return "Loaded to " + slot + ", " + std::to_string(number) + " rejected";
+            case MemNoReply: return "Stopped: no reply";
+            case MemLost: return "Stopped: USB lost";
+            case MemBusy: return "Wait for the load";
+            case MemCancelled: return "Load cancelled";
+        }
+        return "";
+    }
+
     void add(mpc::Param p)
     {
         p.automatable = false;
@@ -456,6 +541,13 @@ private:
                 update(Grid + row * Steps + step, appearance);
             }
         }
+        update(MemoryStatus, memoryStatus_.load());
+        int content = 0;
+        {
+            std::lock_guard<std::mutex> lock(memoryMutex_);
+            if (memory_) content = 1 + memory_->source + (memory_->scale << 1) + (memory_->root << 5);
+        }
+        update(MemoryContent, content);
         if (changed) requestDisplayUpdate();
     }
 
@@ -472,7 +564,28 @@ private:
         bool ownsPort = false;
         uint8_t token = static_cast<uint8_t>(Clock::now().time_since_epoch().count() & 127);
 
+        // Writing a stored pattern to the PC44: one edit at a time, each confirmed.
+        struct Loader {
+            PatternImage image;
+            int slot = 0;
+            int next = 0;
+            int pass = 0;      // a second pass catches anything the PC44 changed meanwhile
+            int changed = 0;
+            int rejected = 0;
+            Clock::time_point retryAt{};
+        };
+        std::optional<Loader> loader;
+        bool loaderPending = false;
+        auto stopLoad = [&](MemoryState why) {
+            if (!loader) return;
+            memoryStatus_.store(memoryCode(why, loader->slot));
+            if (loaderPending) pending.reset();
+            loaderPending = false;
+            loader.reset();
+        };
+
         auto disconnect = [&] {
+            stopLoad(MemLost);
             writable_.store(false);
             if (request_.exchange(0) != 0) receipt = Disconnected;
             pending.reset();
@@ -500,6 +613,12 @@ private:
                 using Result = Monitor::Result;
                 if (result == Result::Telemetry) {
                     lastFrame = now;
+                } else if (result != Result::Ignored && loaderPending && loader) {
+                    loaderPending = false;
+                    pending.reset();
+                    if (result == Result::Applied) { ++loader->changed; ++loader->next; }
+                    else if (result == Result::Saving) loader->retryAt = now + 250ms;  // same edit again
+                    else { ++loader->rejected; ++loader->next; }
                 } else if (result != Result::Ignored) {
                     if (result == Result::Applied && pending) releaseConfirmedDraft(*pending);
                     receipt = result == Result::Applied ? Applied :
@@ -529,17 +648,90 @@ private:
             }
             // Follow edits made on the PC44 itself, but never while a plugin edit is in flight.
             if (const auto touch = monitor.takeTouch();
-                touch && !pending && (link == Live || link == ViewOnly))
+                touch && !pending && !loader && (link == Live || link == ViewOnly))
                 follow(*touch);
 
+            if (abortLoad_.exchange(false)) stopLoad(MemCancelled);
+            if (const int action = memoryAction_.exchange(0)) {
+                const int slot = (action - 1) & 1;
+                if (loader) {
+                    memoryStatus_.store(memoryCode(MemBusy, loader->slot));
+                } else if (action <= 2) {  // Store A / Store B
+                    if (auto image = PatternImage::capture(monitor, slot)) {
+                        std::lock_guard<std::mutex> lock(memoryMutex_);
+                        memory_ = *image;
+                        memoryStatus_.store(memoryCode(MemStored, slot));
+                    } else {
+                        memoryStatus_.store(memoryCode(link == Live || link == ViewOnly ? MemNotRead
+                                                                                        : MemNotConnected, slot));
+                    }
+                } else {                   // Load to A / Load to B
+                    std::optional<PatternImage> image;
+                    {
+                        std::lock_guard<std::mutex> lock(memoryMutex_);
+                        image = memory_;
+                    }
+                    if (!image) memoryStatus_.store(memoryCode(MemEmpty, slot));
+                    else if (link != Live) memoryStatus_.store(memoryCode(MemNotConnected, slot));
+                    else if (!monitor.extended) memoryStatus_.store(memoryCode(MemNeedsFirmware, slot));
+                    else {
+                        loader = Loader{*image, slot};
+                        memoryStatus_.store(memoryCode(MemLoading, slot));
+                    }
+                }
+                redraw_.store(true);
+            }
+
             if (pending && now >= deadline) {
-                pending.reset();
-                request_.store(0);
-                receipt = NoReply;
+                if (loaderPending) {
+                    stopLoad(MemNoReply);
+                } else {
+                    pending.reset();
+                    request_.store(0);
+                    receipt = NoReply;
+                }
+            }
+
+            if (loader && !pending) {
+                if (link != Live) {
+                    stopLoad(MemLost);
+                } else if (now >= loader->retryAt) {
+                    // Skip values the PC44 already has; send the next one that differs.
+                    while (loader->next < PatternImage::EditCount) {
+                        const auto item = loader->image.item(loader->next);
+                        if (monitor.value(loader->slot, item.field, item.index) != item.value) break;
+                        ++loader->next;
+                    }
+                    if (loader->next >= PatternImage::EditCount && loader->pass == 0) {
+                        loader->pass = 1;
+                        loader->next = 0;
+                    } else if (loader->next >= PatternImage::EditCount) {
+                        memoryStatus_.store(loader->rejected
+                            ? memoryCode(MemLoadedErrors, loader->slot, loader->rejected)
+                            : memoryCode(MemLoaded, loader->slot, loader->changed));
+                        loader.reset();
+                        redraw_.store(true);
+                    } else {
+                        const auto item = loader->image.item(loader->next);
+                        token = static_cast<uint8_t>((token + 1) & 127);
+                        const Edit command{token, static_cast<uint8_t>(loader->slot),
+                            static_cast<uint8_t>(item.index), static_cast<uint8_t>(item.field),
+                            static_cast<uint8_t>(item.value)};
+                        if (midi.send(command)) {
+                            deadline = now + 1500ms;
+                            pending = command;
+                            loaderPending = true;
+                            const int percent = loader->pass ? 100 : loader->next * 100 / PatternImage::EditCount;
+                            memoryStatus_.store(memoryCode(MemLoading, loader->slot, percent));
+                        } else {
+                            stopLoad(MemLost);
+                        }
+                    }
+                }
             }
 
             int request = request_.load();
-            if (request > 0 && request_.compare_exchange_strong(request, InFlight)) {
+            if (!loader && request > 0 && request_.compare_exchange_strong(request, InFlight)) {
                 const int edit = (request & ~MissingAmount) - 1;
                 const int slot = (edit >> 19) - 1;
                 const int field = (edit >> 14) & 31;
@@ -566,8 +758,8 @@ private:
                 }
                 if (!pending) request_.store(0);
             }
-            writable_.store(link == Live && !pending);
-            if (link == Live && !pending && request_.load() == 0) {
+            writable_.store(link == Live && !pending && !loader);
+            if (link == Live && !pending && !loader && request_.load() == 0) {
                 // Value changed while an edit was in flight: send the newest one once.
                 for (int page = 0; page < 2; ++page) {
                     if (!dirty_[page].load()) continue;
@@ -583,7 +775,7 @@ private:
                 publish(monitor, link, receipt);
                 nextUI = now + 33ms;
             }
-            std::this_thread::sleep_for(10ms);
+            std::this_thread::sleep_for(loader ? 1ms : 10ms);
         }
         midi.close();
         if (ownsPort) editorOpen.clear();
@@ -599,6 +791,12 @@ private:
     std::atomic<int> selectionKey_[2]{{0}, {StepFields << 14}};
     ControlState controls_[2]{};
     std::atomic<int> request_{0};
+    std::atomic<bool> memoryButtons_[4]{};
+    std::atomic<int> memoryAction_{0};
+    std::atomic<int> memoryStatus_{0};
+    std::atomic<bool> abortLoad_{false};
+    std::mutex memoryMutex_;
+    std::optional<PatternImage> memory_;
     std::thread worker_;
 };
 
@@ -610,6 +808,7 @@ VstIntPtr dispatch(AEffect* effect, VstInt32 opcode, VstInt32 index, VstIntPtr v
     // Project and preset loads restore parameter values but never emit an edit.
     auto* editor = static_cast<Editor*>(effect->object);
     editor->cancelStagedEdit();
+    if (opcode == effSetChunk) editor->beforeStateLoad();
     const bool saved = restoring;
     restoring = true;
     const auto result = mpc::detail::dispatcher(effect, opcode, index, value, ptr, opt);

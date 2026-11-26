@@ -283,6 +283,88 @@ int main(int argc, char** argv)
     assert(std::lround(plugin->getParameter(plugin, SetupTrack) * 3) == 1);
     noCommand();
 
+    // Pattern memory: store A, write it into B, keep it in the project.
+    constexpr int StoreA = 104, StoreB = 105, LoadA = 106, LoadB = 107, Memory = 108, MemoryStatus = 109;
+    auto row = [](uint8_t block, uint8_t slot, uint8_t track, std::array<uint8_t, 16> values) {
+        std::array<uint8_t, 23> bytes{0xf0, 0x7d, 0x50, 0x34, static_cast<uint8_t>(0x30 + block),
+                                      static_cast<uint8_t>(track + slot * 4)};
+        std::copy(values.begin(), values.end(), bytes.begin() + 6);
+        bytes.back() = 0xf7;
+        fake_emit(bytes.data(), bytes.size(), 24);
+    };
+    auto pattern = [&](uint8_t slot, uint8_t firstMode, uint8_t scale, uint8_t velocity) {
+        for (uint8_t track = 0; track < 4; ++track) {
+            row(0, slot, track, {16, 4, 0, static_cast<uint8_t>(track ? 0 : firstMode), 3, track,
+                                 0, 0, scale, 9, 0, 1, 2, 0, 0, slot});
+            std::array<uint8_t, 16> lane{};
+            lane.fill(100);
+            if (track == 1) lane[4] = velocity;
+            row(1, slot, track, lane);
+            lane.fill(60);
+            row(2, slot, track, lane);
+            lane.fill(9);
+            row(3, slot, track, lane);
+            lane.fill(4);
+            row(4, slot, track, lane);
+            lane.fill(1);
+            row(5, slot, track, lane);
+            lane.fill(0);
+            row(6, slot, track, lane);
+            lane.fill(6);
+            row(7, slot, track, lane);
+        }
+    };
+    expect(plugin, Memory, "Empty");
+    plugin->setParameter(plugin, LoadB, 1.0f);
+    expect(plugin, MemoryStatus, "Nothing stored");
+    pattern(0, 0, 1, 100);          // A: note mode, A Major
+    pattern(1, 1, 2, 50);           // B differs in mode, scale and one velocity
+    std::this_thread::sleep_for(150ms);
+    plugin->setParameter(plugin, StoreA, 1.0f);
+    expect(plugin, MemoryStatus, "Stored from A");
+    expect(plugin, Memory, "A: A Major");
+    noCommand();                    // storing never writes to the PC44
+
+    plugin->setParameter(plugin, LoadB, 0.0f);   // every tap flips the button
+    auto takeExtended = [](uint8_t slot, uint8_t index, uint8_t field, uint8_t value) {
+        std::array<uint8_t, 12> bytes{};
+        assert(waitFor([&] { return fake_command(bytes.data()) == 12; }));
+        assert(bytes[4] == 0x22 && bytes[6] == slot && bytes[7] == index && bytes[9] == field &&
+               bytes[8] == value && bytes[10] == 0);
+        return bytes;
+    };
+    auto answer = [](const std::array<uint8_t, 12>& bytes, uint8_t result) {
+        emit({0xf0, 0x7d, 0x50, 0x34, 0x23, bytes[5], bytes[6], bytes[7], bytes[8], bytes[9],
+              bytes[10], result, 0xf7});
+    };
+    auto mode = takeExtended(1, 0, 10, 0);       // mode first, so pitches read right
+    answer(mode, 1);                             // PC44 is saving: the same edit comes again
+    expect(plugin, MemoryStatus, "Loading to B  0%");
+    answer(takeExtended(1, 0, 10, 0), 0);
+    answer(takeExtended(1, 0, 13, 1), 0);        // then the tuning
+    reply(command(1, 20, 100), 0);               // then the one differing step
+    expect(plugin, MemoryStatus, "Loaded to B: 3 changed");
+    noCommand();                                 // identical values are skipped
+    plugin->setParameter(plugin, LoadB, 1.0f);
+    expect(plugin, MemoryStatus, "B already matches");
+    noCommand();
+
+    // The memory is part of the plugin state the MPC saves in projects and presets.
+    void* memoryChunk = nullptr;
+    const auto chunkSize = plugin->dispatcher(plugin, effGetChunk, 0, 0, &memoryChunk, 0);
+    const auto* chunkBytes = static_cast<const uint8_t*>(memoryChunk);
+    std::vector<uint8_t> withMemory(chunkBytes, chunkBytes + chunkSize);
+    constexpr std::size_t memorySize = 480;
+    assert(withMemory.size() > memorySize + 4);
+    std::vector<uint8_t> withoutMemory(withMemory.begin(), withMemory.end() - memorySize);
+    std::fill(withoutMemory.end() - 4, withoutMemory.end(), 0);
+    assert(plugin->dispatcher(plugin, effSetChunk, 0, withoutMemory.size(), withoutMemory.data(), 0) == 1);
+    expect(plugin, Memory, "Empty");
+    expect(plugin, MemoryStatus, "");
+    assert(plugin->dispatcher(plugin, effSetChunk, 0, withMemory.size(), withMemory.data(), 0) == 1);
+    expect(plugin, Memory, "A: A Major");
+    noCommand();                                 // loading a project never writes to the PC44
+
     float left[]{0.25f, 0.75f}, right[]{-0.125f, 0.5f}, outL[2]{}, outR[2]{};
     float* inputs[]{left, right};
     float* outputs[]{outL, outR};
@@ -291,5 +373,5 @@ int main(int argc, char** argv)
     assert(std::equal(std::begin(right), std::end(right), outR));
     plugin->dispatcher(plugin, effClose, 0, 0, nullptr, 0);
     dlclose(library);
-    std::puts("PC44 Editor USB, A/B acknowledgements, project recall, following PC44 edits and stereo passthrough passed.");
+    std::puts("PC44 Editor USB, A/B acknowledgements, project recall, following PC44 edits, pattern memory and stereo passthrough passed.");
 }

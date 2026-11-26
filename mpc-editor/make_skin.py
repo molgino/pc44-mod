@@ -61,6 +61,8 @@ def assets():
                 _, x, y, width = setting_rect(i)
                 rounded(draw, (x, y, x + width - 1, y + 68), "#202632", "#303847", radius=7)
         draw.line((1046, 236, 1234, 236), fill=BORDER)
+        if page == "setup":
+            draw.line((1046, 320, 1234, 320), fill=BORDER)
         image.save(OUT / f"{page}_panel.png")
 
     # The MPC scales each frame to the step bounds. Keep the source small
@@ -94,6 +96,8 @@ def assets():
         for i, word in enumerate(words):
             for on in (False, True):
                 button_asset(f"{prefix}_{i}_{int(on)}.png", word, width, height, on)
+    for i, word in enumerate(MEMORY_BUTTONS):
+        button_asset(f"memory_{i}.png", word, 92, 40, False, size=18)
     for name, dims in (("track_setting", (199, 69)), ("tuning_setting", (158, 69)),
                        ("global_setting", (138, 69))):
         off = Image.new("RGBA", dims)
@@ -104,7 +108,10 @@ def assets():
         on.save(OUT / f"{name}_1.png")
 
 
-def button_asset(file, word, w, h, on, primary=False):
+MEMORY_BUTTONS = ("Store A", "Store B", "Load to A", "Load to B")
+
+
+def button_asset(file, word, w, h, on, primary=False, size=20):
     img = Image.new("RGBA", (w, h))
     draw = ImageDraw.Draw(img)
     fill = "#ffbe70" if primary else ("#443121" if on else "#202632")
@@ -112,7 +119,7 @@ def button_asset(file, word, w, h, on, primary=False):
     color = "#18110b" if primary else ("#ffd298" if on else "#e0e7f1")
     rounded(draw, (0, 0, w - 1, h - 1), fill, stroke, width=2 if on else 1, radius=7)
     if word:
-        draw.text((w / 2, h / 2), word, font=font(20), fill=color, anchor="mm")
+        draw.text((w / 2, h / 2), word, font=font(size), fill=color, anchor="mm")
     img.save(OUT / file)
 
 
@@ -254,12 +261,15 @@ def setup_page():
             button(f"Select {title}", (x, y, w, 69), 85, f"{group}_1.png", f"{group}_0.png",
                    len(SETTINGS), i, focus=False),
         ]
+    # Pattern memory: the stored pattern travels with the MPC project and presets.
     parts += [
-        label("Track and pattern edits", (1046, 336, 199, 25), 17, MUTED),
-        label("go to the selected A/B.", (1046, 361, 199, 25), 17, MUTED),
-        label("Global settings affect", (1046, 414, 199, 25), 17, MUTED),
-        label("both patterns.", (1046, 439, 199, 25), 17, MUTED),
+        label("PATTERN MEMORY", (1046, 328, 190, 25), 16, AMBER, bold=True),
+        label("Memory content", (1046, 353, 192, 28), 19, param=108, bold=True),
+        label("Memory status", (1046, 482, 194, 24), 16, MUTED, param=109),
     ]
+    for i, word in enumerate(MEMORY_BUTTONS):
+        xy = (1046 + i % 2 * 98, 390 + i // 2 * 46, 92, 40)
+        parts.append(button(word, xy, 104 + i, f"memory_{i}.png", f"memory_{i}.png", focus=False))
     editor(parts, setup=True)
     return parts
 

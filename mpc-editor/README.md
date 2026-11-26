@@ -1,13 +1,13 @@
 # PC44 Editor for MPC standalone
 
-PC44 Editor 0.7.2 is a stereo pass-through insert for the Faderfox PC44
+PC44 Editor 0.8.0 is a stereo pass-through insert for the Faderfox PC44
 sequencer. It connects directly to the PC44 over USB MIDI. It uses no plugin
 instrument track or MIDI Learn.
 
 ## Install on an MPC Live III
 
 1. Remove or replace the previous `NOXED - VST - PC44 Editor` folder in
-   `VST2 Plugins`. Copy the folder from the 0.7.2 ZIP into that same location.
+   `VST2 Plugins`. Copy the folder from the 0.8.0 ZIP into that same location.
 2. On MPC OS 3.10.1 or newer, enable **Enable Enhancements** and **External
    Plugin Support** in **Preferences → Enhancements (Beta)**.
 3. Flash the matched **PC44_seq_ab_one_hand.syx** to enable both pattern
@@ -34,6 +34,17 @@ new version. Open one instance per MPC.
   the **Setup** page; switch to that page with the MPC's tab. Ctrl All keeps
   the step column. Pattern copy, load and undo change several things at once
   and are not followed. Following only selects; it never sends anything.
+- **Pattern memory** (Setup page, right): **Store A** or **Store B** copies
+  that pattern from the PC44 into the editor: every step lane, the track
+  settings, scale and root. The MPC keeps it with the project and with every
+  user preset you save from the plugin's preset menu, so the preset list is
+  your pattern library. **Load to A** or **Load to B** writes the stored
+  pattern to the PC44, also across slots (store from A, load to B). Only
+  values that differ are sent, each one confirmed; the status line shows the
+  progress. Tempo, swing and track volume are shared and stay as they are.
+  Loading a project or preset never writes to the PC44 by itself. A loaded
+  pattern is in the PC44's RAM like any edit: use **Shift + 5** there to keep
+  it across a reboot.
 - In **Setup**, choose a track and tap a setting card. See the current
   track, pattern, and global values in the cards.
 - Turn **Value** with its Q-Link (Q-Link 4) or the slider. The change is sent
